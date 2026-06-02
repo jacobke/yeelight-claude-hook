@@ -6,6 +6,8 @@
 ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
+![Yeelight Cube Lite](yeelight-cube-light.webp)
+
 **English** | [中文文档](README_CN.md)
 
 ## 功能特性
