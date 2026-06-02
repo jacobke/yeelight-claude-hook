@@ -19,6 +19,7 @@
 - 💚 **Task Complete** - Green breathing light on completion
 - ⚡ **Real-time Response** - Interruptible effects, new commands take effect immediately
 - 🔌 **Long Connection** - Daemon mode avoids device connection quota limits
+- 🔢 **Instance Marking** - White pixel shows Claude Code instance number (1-20)
 
 ## Demo
 
@@ -44,11 +45,21 @@ python3 discover.py
 Edit `com.yeelight.daemon.plist.template`:
 - Update path to `yeelight-daemon.py`
 - Update device IP address
+- (Optional) Set instance number (1-20) for pixel marking
 
 ```bash
 cp com.yeelight.daemon.plist.template ~/Library/LaunchAgents/com.yeelight.daemon.plist
 launchctl load ~/Library/LaunchAgents/com.yeelight.daemon.plist
 ```
+
+**Instance Marking**: When running multiple Claude Code instances, set different `--instance` numbers (1-20). A white pixel will appear at the top-right corner to identify which instance is active.
+
+| Instance | Pixel Position |
+|----------|----------------|
+| 1 | Top-right corner |
+| 2 | 2nd from right |
+| ... | ... |
+| 20 | Top-left corner |
 
 ### 3. Configure Claude Code Hooks
 

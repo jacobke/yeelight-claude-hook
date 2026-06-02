@@ -143,9 +143,10 @@ def render_centered_with_bg(text, text_color, bg_color):
 # ============================================================================
 
 class YeelightDaemon:
-    def __init__(self, ip, port=55443):
+    def __init__(self, ip, port=55443, instance=0):
         self.ip = ip
         self.port = port
+        self.instance = instance  # 实例编号 (0=不显示, 1-20=显示位置)
         self.sock = None
         self.running = True
         self.interrupted = False  # 效果中断标志
@@ -153,6 +154,26 @@ class YeelightDaemon:
         self.command_count = 0
         self.last_command_time = 0
         self.lock = threading.Lock()  # 保护 socket 操作
+
+    def mark_instance(self, grid, color=(255, 255, 255)):
+        """在 grid 上标记实例编号（白色像素）
+
+        实例编号 1-20，标记在顶行从右到左：
+        1 = 最右上角 (pixel 99)
+        2 = 右数第二个 (pixel 98)
+        ...
+        20 = 最左上角 (pixel 80)
+        """
+        if self.instance < 1 or self.instance > 20:
+            return grid
+
+        # 顶行：pixels 80-99 (从左到右)
+        # 实例标记从右到左：instance=1 → pixel 99, instance=2 → pixel 98
+        pixel_index = 99 - (self.instance - 1)
+        if 80 <= pixel_index <= 99:
+            grid[pixel_index] = color
+
+        return grid
 
     def connect(self):
         """连接设备"""
@@ -225,6 +246,11 @@ class YeelightDaemon:
         """中断当前效果"""
         self.interrupted = True
 
+    def send_pixels_with_mark(self, grid):
+        """发送像素并标记实例编号"""
+        grid = self.mark_instance(grid)
+        self.send_pixels(grid)
+
     # ========================================================================
     # 效果方法
     # ========================================================================
@@ -250,7 +276,7 @@ class YeelightDaemon:
                 for row in range(5):
                     grid.append((r, g, b))
             render_centered("START", (255, 255, 255), grid)
-            self.send_pixels(grid)
+            self.send_pixels_with_mark(grid)
             time.sleep(0.5)
 
     def effect_thinking(self, duration=300):
@@ -275,7 +301,7 @@ class YeelightDaemon:
                     r, g, b = hsv_to_rgb(hue, sat, brightness)
                     grid.append((r, g, b))
             render_centered("THINK", (255, 240, 200), grid)
-            self.send_pixels(grid)
+            self.send_pixels_with_mark(grid)
             time.sleep(random.uniform(0.45, 0.55))
 
     def effect_done(self):
@@ -290,7 +316,7 @@ class YeelightDaemon:
             brightness = i / steps_in
             tc = (int(color[0] * brightness), int(color[1] * brightness), int(color[2] * brightness))
             grid = render_centered("DONE", tc)
-            self.send_pixels(grid)
+            self.send_pixels_with_mark(grid)
             time.sleep(0.15)
 
         # 保持显示 2 秒
@@ -298,7 +324,7 @@ class YeelightDaemon:
             if self.check_interrupted():
                 return
             grid = render_centered("DONE", color)
-            self.send_pixels(grid)
+            self.send_pixels_with_mark(grid)
             time.sleep(0.2)
 
         # 渐出
@@ -309,7 +335,7 @@ class YeelightDaemon:
             brightness = i / steps_out
             tc = (int(color[0] * brightness), int(color[1] * brightness), int(color[2] * brightness))
             grid = render_centered("DONE", tc)
-            self.send_pixels(grid)
+            self.send_pixels_with_mark(grid)
             time.sleep(0.15)
 
     def effect_wait(self, duration=300):
@@ -329,7 +355,7 @@ class YeelightDaemon:
                     r, g, b = grid[idx]
                     if r > 0 or g > 0 or b > 0:
                         grid[idx] = (int(r * brightness), int(g * brightness), int(b * brightness))
-            self.send_pixels(grid)
+            self.send_pixels_with_mark(grid)
             time.sleep(0.5)
 
     def effect_interrupt(self):
@@ -339,11 +365,11 @@ class YeelightDaemon:
         for _ in range(5):
             if self.check_interrupted():
                 return
-            self.send_pixels(grid_on)
+            self.send_pixels_with_mark(grid_on)
             time.sleep(0.5)
             if self.check_interrupted():
                 return
-            self.send_pixels(grid_off)
+            self.send_pixels(grid_off)  # 关灯不显示实例标记
             time.sleep(0.4)
 
     def effect_complete(self):
@@ -368,7 +394,7 @@ class YeelightDaemon:
             tc = (int(255 * brightness), int(50 * brightness), int(50 * brightness))
             bc = (int(40 * brightness), int(5 * brightness), int(5 * brightness))
             grid = render_centered_with_bg("END", tc, bc)
-            self.send_pixels(grid)
+            self.send_pixels_with_mark(grid)
             time.sleep(duration / steps)
         self.effect_off()
 
@@ -471,9 +497,10 @@ def main():
     parser = argparse.ArgumentParser(description="Yeelight Daemon")
     parser.add_argument("--ip", default=DEFAULT_IP)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--instance", type=int, default=0, help="Instance number (1-20) for pixel marking")
     args = parser.parse_args()
 
-    daemon = YeelightDaemon(args.ip, args.port)
+    daemon = YeelightDaemon(args.ip, args.port, args.instance)
 
     def signal_handler(sig, frame):
         print("\nShutting down...")

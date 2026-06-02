@@ -19,6 +19,7 @@
 - 💚 **任务完成** - 绿色呼吸灯表示任务完成
 - ⚡ **实时响应** - 效果可中断，新命令立即生效
 - 🔌 **长连接** - Daemon 模式避免设备连接配额限制
+- 🔢 **实例标记** - 白色像素显示 Claude Code 实例编号 (1-20)
 
 ## 效果预览
 
@@ -45,11 +46,21 @@ python3 discover.py
 编辑 `com.yeelight.daemon.plist.template`：
 - 修改 `/path/to/yeelight-daemon.py` 为实际路径
 - 修改 `YOUR_YEELIGHT_IP` 为设备 IP
+- （可选）设置实例编号 (1-20) 用于像素标记
 
 ```bash
 cp com.yeelight.daemon.plist.template ~/Library/LaunchAgents/com.yeelight.daemon.plist
 launchctl load ~/Library/LaunchAgents/com.yeelight.daemon.plist
 ```
+
+**实例标记**：当运行多个 Claude Code 实例时，设置不同的 `--instance` 编号 (1-20)。右上角会显示白色像素来标识当前活跃的实例。
+
+| 实例 | 像素位置 |
+|------|----------|
+| 1 | 最右上角 |
+| 2 | 右数第二 |
+| ... | ... |
+| 20 | 最左上角 |
 
 ### 3. 配置 Claude Code Hooks
 
