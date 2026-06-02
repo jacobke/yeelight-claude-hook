@@ -6,7 +6,12 @@
 [![Python](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-<img src="yeelight-cube-light.webp" alt="Yeelight Cube Lite" width="300">
+<table>
+  <tr>
+    <td><img src="demo.gif" alt="演示效果" width="300"></td>
+    <td><img src="yeelight-cube-light.webp" alt="Yeelight Cube Lite" width="300"></td>
+  </tr>
+</table>
 
 **Yeelight Smart Lamp Cube Lite**
 
