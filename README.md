@@ -8,6 +8,8 @@
 
 <img src="yeelight-cube-light.webp" alt="Yeelight Cube Lite" width="300">
 
+**Yeelight Smart Lamp Cube Lite**
+
 **English** | [中文](README_CN.md)
 
 ## Features
