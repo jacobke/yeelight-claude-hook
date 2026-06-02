@@ -155,22 +155,23 @@ class YeelightDaemon:
         self.last_command_time = 0
         self.lock = threading.Lock()  # 保护 socket 操作
 
-    def mark_instance(self, grid, color=(255, 255, 255)):
-        """在 grid 上标记实例编号（白色像素）
+    def mark_instance(self, grid, color=(255, 200, 50)):
+        """在 grid 上标记实例编号（土豪金像素）
 
-        实例编号 1-20，标记在顶行从右到左：
-        1 = 最右上角 (pixel 99)
-        2 = 右数第二个 (pixel 98)
-        ...
-        20 = 最左上角 (pixel 80)
+        实例编号 1-5，标记在最右边列从上到下：
+        1 = 最右上角 (pixel 99, row 4)
+        2 = 右上角往下 (pixel 79, row 3)
+        3 = pixel 59 (row 2)
+        4 = pixel 39 (row 1)
+        5 = 最右下角 (pixel 19, row 0)
         """
-        if self.instance < 1 or self.instance > 20:
+        if self.instance < 1 or self.instance > 5:
             return grid
 
-        # 顶行：pixels 80-99 (从左到右)
-        # 实例标记从右到左：instance=1 → pixel 99, instance=2 → pixel 98
-        pixel_index = 99 - (self.instance - 1)
-        if 80 <= pixel_index <= 99:
+        # 最右边列：从上往下
+        # row 4 → pixel 99, row 3 → pixel 79, row 2 → pixel 59, row 1 → pixel 39, row 0 → pixel 19
+        pixel_index = 99 - (self.instance - 1) * 20
+        if 0 <= pixel_index <= 99:
             grid[pixel_index] = color
 
         return grid
@@ -497,7 +498,7 @@ def main():
     parser = argparse.ArgumentParser(description="Yeelight Daemon")
     parser.add_argument("--ip", default=DEFAULT_IP)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
-    parser.add_argument("--instance", type=int, default=0, help="Instance number (1-20) for pixel marking")
+    parser.add_argument("--instance", type=int, default=0, help="Instance number (1-5) for pixel marking, 0=disabled")
     args = parser.parse_args()
 
     daemon = YeelightDaemon(args.ip, args.port, args.instance)

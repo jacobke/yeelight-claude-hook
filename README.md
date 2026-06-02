@@ -19,7 +19,7 @@
 - 💚 **Task Complete** - Green breathing light on completion
 - ⚡ **Real-time Response** - Interruptible effects, new commands take effect immediately
 - 🔌 **Long Connection** - Daemon mode avoids device connection quota limits
-- 🔢 **Instance Marking** - White pixel shows Claude Code instance number (1-20)
+- 🔢 **Instance Marking** - Gold pixel shows Claude Code instance number (1-5)
 
 ## Demo
 
@@ -52,14 +52,15 @@ cp com.yeelight.daemon.plist.template ~/Library/LaunchAgents/com.yeelight.daemon
 launchctl load ~/Library/LaunchAgents/com.yeelight.daemon.plist
 ```
 
-**Instance Marking**: When running multiple Claude Code instances, set different `--instance` numbers (1-20). A white pixel will appear at the top-right corner to identify which instance is active.
+**Instance Marking**: When running multiple Claude Code instances, set different `--instance` numbers (1-5). A gold pixel will appear at the rightmost column to identify which instance is active.
 
 | Instance | Pixel Position |
 |----------|----------------|
-| 1 | Top-right corner |
-| 2 | 2nd from right |
-| ... | ... |
-| 20 | Top-left corner |
+| 1 | Top-right corner (row 4) |
+| 2 | 2nd row from top (row 3) |
+| 3 | Middle row (row 2) |
+| 4 | 4th row from top (row 1) |
+| 5 | Bottom-right corner (row 0) |
 
 ### 3. Configure Claude Code Hooks
 

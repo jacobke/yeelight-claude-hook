@@ -19,7 +19,7 @@
 - 💚 **任务完成** - 绿色呼吸灯表示任务完成
 - ⚡ **实时响应** - 效果可中断，新命令立即生效
 - 🔌 **长连接** - Daemon 模式避免设备连接配额限制
-- 🔢 **实例标记** - 白色像素显示 Claude Code 实例编号 (1-20)
+- 🔢 **实例标记** - 土豪金像素显示 Claude Code 实例编号 (1-5)
 
 ## 效果预览
 
@@ -53,14 +53,15 @@ cp com.yeelight.daemon.plist.template ~/Library/LaunchAgents/com.yeelight.daemon
 launchctl load ~/Library/LaunchAgents/com.yeelight.daemon.plist
 ```
 
-**实例标记**：当运行多个 Claude Code 实例时，设置不同的 `--instance` 编号 (1-20)。右上角会显示白色像素来标识当前活跃的实例。
+**实例标记**：当运行多个 Claude Code 实例时，设置不同的 `--instance` 编号 (1-5)。最右边列会显示土豪金像素来标识当前活跃的实例。
 
 | 实例 | 像素位置 |
 |------|----------|
-| 1 | 最右上角 |
-| 2 | 右数第二 |
-| ... | ... |
-| 20 | 最左上角 |
+| 1 | 右上角 (第4行) |
+| 2 | 右数第二行 (第3行) |
+| 3 | 中间行 (第2行) |
+| 4 | 右数第四行 (第1行) |
+| 5 | 右下角 (第0行) |
 
 ### 3. 配置 Claude Code Hooks
 
