@@ -180,11 +180,8 @@ class YeelightDaemon:
                 pass
             self.sock = None
 
-    def send_command(self, method, params):
-        """发送命令（带频率限制）"""
-        if not self.sock:
-            return False
-
+    def send_command(self, method, params, retry=True):
+        """发送命令（带频率限制和自动重连）"""
         with self.lock:
             # 频率限制：每秒最多 2 个命令
             now = time.time()
@@ -193,12 +190,20 @@ class YeelightDaemon:
 
             cmd = {"id": int(time.time() * 1000) % 10000, "method": method, "params": params}
             try:
+                if not self.sock:
+                    if not self.connect():
+                        return False
                 self.sock.send((json.dumps(cmd) + "\r\n").encode())
                 self.command_count += 1
                 self.last_command_time = time.time()
                 return True
             except Exception as e:
-                print(f"Send failed: {e}", file=sys.stderr)
+                print(f"Send failed: {e}, reconnecting...", file=sys.stderr)
+                self.close()
+                if retry:
+                    time.sleep(1)
+                    if self.connect():
+                        return self.send_command(method, params, retry=False)
                 return False
 
     def send_pixels(self, grid):
