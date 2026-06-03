@@ -211,22 +211,33 @@ class YeelightDaemon:
                 time.sleep(0.5 - (now - self.last_command_time))
 
             cmd = {"id": int(time.time() * 1000) % 10000, "method": method, "params": params}
-            try:
-                if not self.sock:
-                    if not self.connect():
-                        return False
-                self.sock.send((json.dumps(cmd) + "\r\n").encode())
-                self.command_count += 1
-                self.last_command_time = time.time()
-                return True
-            except Exception as e:
-                print(f"Send failed: {e}, reconnecting...", file=sys.stderr)
-                self.close()
-                if retry:
-                    time.sleep(1)
-                    if self.connect():
-                        return self.send_command(method, params, retry=False)
-                return False
+
+            # 尝试发送（最多尝试 3 次）
+            max_attempts = 3
+            for attempt in range(max_attempts):
+                try:
+                    # 检查并建立连接
+                    if not self.sock:
+                        if not self.connect():
+                            if attempt < max_attempts - 1:
+                                time.sleep(1)
+                                continue
+                            return False
+
+                    self.sock.send((json.dumps(cmd) + "\r\n").encode())
+                    self.command_count += 1
+                    self.last_command_time = time.time()
+                    return True
+
+                except Exception as e:
+                    print(f"Send failed (attempt {attempt + 1}): {e}", file=sys.stderr)
+                    self.close()
+                    if attempt < max_attempts - 1:
+                        print(f"Reconnecting in 1 second...", file=sys.stderr)
+                        time.sleep(1)
+                    continue
+
+            return False
 
     def send_pixels(self, grid):
         """发送像素数据"""
