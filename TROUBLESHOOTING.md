@@ -217,3 +217,92 @@ tail -f /tmp/yeelight-daemon.log
 # 5. 测试连接
 echo '{"state": "done"}' | nc -U /tmp/yeelight.sock
 ```
+
+## 设备假死（无响应）的诊断与缓解
+
+### 症状
+
+设备接受 TCP 连接、TCP socket 仍是 `ESTABLISHED`，但对所有 LAN 命令**完全无响应**：
+
+- `get_prop` / `set_power` / `toggle` / `set_music` 全部超时
+- App 控制正常
+- 唯一恢复办法：**断电重启**
+
+### 根因（假说）：TCP 接收缓冲区填满
+
+Yeelight 设备会对每个命令回 `{"id":X,"result":["ok"]}`，并在状态变化时主动推送 `props` 通知。但当前代码的两个发送端都**只 send、不 recv**：
+
+| 文件 | 函数 | 行为 |
+|------|------|------|
+| `yeelight-daemon.py:205` | `send_command` | `sock.send(...)` 后立即返回，不读响应 |
+| `yeelight-hook.py:214` | `send_command` | 同上 |
+
+设备端的 TCP 发送缓冲区是有限的（macOS 默认 ~64KB）。每个响应约 30-50 字节，每个 `props` 通知约 50-100 字节。**长时间运行后，设备端的 send buffer 被填满，TCP 流量控制会阻止设备继续处理新命令**，表现为"假死"。`lsof` 看到连接还是 ESTABLISHED，但其实设备已经停止处理。
+
+### 缓解措施
+
+**临时缓解**：电源重启（每次都管用，但治标不治本）。
+
+**代码层修复**（建议但未实施）：在 daemon 里加一个 reader 线程，循环 `sock.recv()` 清空缓冲区并丢弃响应：
+
+```python
+def _reader_loop(self):
+    """后台读取响应，防止设备端 send buffer 填满导致假死"""
+    while self.running:
+        try:
+            self.sock.settimeout(1.0)
+            data = self.sock.recv(4096)
+            if not data:
+                # 设备关闭了连接，重连
+                self.reconnect()
+        except socket.timeout:
+            continue
+        except Exception:
+            self.reconnect()
+
+# 在 connect() 成功后启动：
+self.reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
+self.reader_thread.start()
+```
+
+### 排查注意事项
+
+**用错探针会被误判为"假死"。** Yeelight 协议规定：
+- ✅ `set_*` / `toggle` 会返回响应
+- ❌ `get_prop` **不会**返回响应（设备协议设计如此，见 `YEELIGHT_GUIDE.md:304-305`）
+
+所以**正确的连通性测试**是：
+
+```bash
+python3 -c "
+import socket, json
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.settimeout(5)
+s.connect(('192.168.2.6', 55443))
+s.send((json.dumps({'id':1,'method':'set_power','params':['on','smooth',500]}) + '\r\n').encode())
+print(s.recv(1024).decode().strip())  # 期望: {\"id\":1,\"result\":[\"ok\"]}
+"
+```
+
+如果 `set_power` 也不响应，才是真正的"假死"。
+
+## 多台电脑 / 多个 daemon 共享同一设备
+
+如果多台电脑（或同一台电脑上跑多个 daemon 实例）共享同一台 Yeelight 灯，需要用 `--shared N` 参数让每个 daemon 按数量均分命令配额：
+
+```bash
+# 2 台电脑共享 → 每台 daemon 加 --shared 2（每 daemon 30 命令/分钟）
+# 注意：每台电脑都需要手动设置相同的 N 值（daemon 之间无自动协商）
+python3 yeelight-daemon.py --ip 192.168.x.x --shared 2
+```
+
+plist 中：
+
+```xml
+<string>--shared</string>
+<string>2</string>
+```
+
+**计算方式**：`每 daemon 命令间隔 = N 秒`，因此 `每 daemon 命令速率 = 60/N 命令/分钟`。Yeelight 设备总配额约 60 命令/分钟，多 daemon 总和不应超过这个值。
+
+**未设置 `--shared` 的后果**：每 daemon 按默认 60/分钟发送，2 台合计 120/分钟，会触发设备的命令频率限制并加速假死。
