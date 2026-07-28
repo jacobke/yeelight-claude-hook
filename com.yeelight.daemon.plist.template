@@ -12,6 +12,13 @@
         <string>YOUR_YEELIGHT_IP</string>
         <string>--instance</string>
         <string>0</string>
+        <!--
+            --shared N: 如果多台电脑共享同一台设备，每台 daemon 设 N=电脑总数，
+            自动按 N 分摊命令配额（默认 N=1，即 60 命令/分钟）。
+            例：2 台电脑共享 → --shared 2 → 每 daemon 30 命令/分钟。
+        -->
+        <string>--shared</string>
+        <string>1</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -25,6 +32,8 @@
     <dict>
         <key>PATH</key>
         <string>/usr/local/bin:/usr/bin:/bin</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
     </dict>
 </dict>
 </plist>

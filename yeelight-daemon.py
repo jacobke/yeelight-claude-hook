@@ -143,10 +143,11 @@ def render_centered_with_bg(text, text_color, bg_color):
 # ============================================================================
 
 class YeelightDaemon:
-    def __init__(self, ip, port=55443, instance=0):
+    def __init__(self, ip, port=55443, instance=0, shared=1):
         self.ip = ip
         self.port = port
         self.instance = instance  # 实例编号 (0=不显示, 1-20=显示位置)
+        self.shared = max(1, shared)  # 同时连接此设备的 daemon 数量，用于分摊命令配额
         self.sock = None
         self.running = True
         self.interrupted = False  # 效果中断标志
@@ -154,6 +155,10 @@ class YeelightDaemon:
         self.command_count = 0
         self.last_command_time = 0
         self.lock = threading.Lock()  # 保护 socket 操作
+        self.reader_thread = None  # 后台读取线程，防止设备 send buffer 填满导致假死
+        # 命令间隔：默认 1 秒（每秒 1 命令 = 60/分钟）。
+        # 共享模式下按 daemon 数量均分：shared=2 → 每 2 秒 1 命令（30/分钟）
+        self.command_interval = float(self.shared)
 
     def mark_instance(self, grid, color=(255, 200, 50)):
         """在 grid 上标记实例编号（土豪金像素）
@@ -182,11 +187,48 @@ class YeelightDaemon:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.sock.settimeout(5)
             self.sock.connect((self.ip, self.port))
-            print(f"Connected to {self.ip}:{self.port}")
+            print(f"Connected to {self.ip}:{self.port}", flush=True)
+            # 连接成功后启动后台 reader 线程，持续清空设备 TCP send buffer
+            # 否则长时间运行后设备会因 send buffer 填满而假死
+            self._start_reader()
             return True
         except Exception as e:
-            print(f"Connection failed: {e}", file=sys.stderr)
+            print(f"Connection failed: {e}", file=sys.stderr, flush=True)
             return False
+
+    def _start_reader(self):
+        """启动后台 reader 线程"""
+        if self.reader_thread and self.reader_thread.is_alive():
+            return
+        self.reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
+        self.reader_thread.start()
+
+    def _reader_loop(self):
+        """后台循环读取设备响应，防止设备端 send buffer 填满导致假死
+
+        Yeelight 设备会对每个命令返回响应，状态变化时还会主动推送 props 通知。
+        这些数据如果一直不读取，设备 TCP send buffer 会被填满，触发 TCP 流量控制，
+        设备会停止处理新命令 —— 表现为「连接还在但所有命令超时」，只能断电恢复。
+        """
+        while self.running:
+            sock = self.sock
+            if sock is None:
+                time.sleep(0.5)
+                continue
+            try:
+                sock.settimeout(1.0)
+                data = sock.recv(4096)
+                if not data:
+                    # 设备主动关闭连接，让 send_command 的重连逻辑接管
+                    print("Device closed connection (reader detected)", file=sys.stderr, flush=True)
+                    self.close()
+                    time.sleep(1)
+            except socket.timeout:
+                continue
+            except Exception as e:
+                if self.running:
+                    print(f"Reader error: {e}", file=sys.stderr, flush=True)
+                time.sleep(1)
 
     def reconnect(self):
         """重连"""
@@ -205,10 +247,12 @@ class YeelightDaemon:
     def send_command(self, method, params, retry=True):
         """发送命令（带频率限制和自动重连）"""
         with self.lock:
-            # 频率限制：每秒最多 2 个命令
+            # 频率限制：间隔由 self.command_interval 决定（默认 1 秒）
+            # 多 daemon 共享同一台设备时，按 shared 数均分配额
             now = time.time()
-            if now - self.last_command_time < 0.5:
-                time.sleep(0.5 - (now - self.last_command_time))
+            wait = self.command_interval - (now - self.last_command_time)
+            if wait > 0:
+                time.sleep(wait)
 
             cmd = {"id": int(time.time() * 1000) % 10000, "method": method, "params": params}
 
@@ -230,10 +274,10 @@ class YeelightDaemon:
                     return True
 
                 except Exception as e:
-                    print(f"Send failed (attempt {attempt + 1}): {e}", file=sys.stderr)
+                    print(f"Send failed (attempt {attempt + 1}): {e}", file=sys.stderr, flush=True)
                     self.close()
                     if attempt < max_attempts - 1:
-                        print(f"Reconnecting in 1 second...", file=sys.stderr)
+                        print(f"Reconnecting in 1 second...", file=sys.stderr, flush=True)
                         time.sleep(1)
                     continue
 
@@ -510,9 +554,12 @@ def main():
     parser.add_argument("--ip", default=DEFAULT_IP)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--instance", type=int, default=0, help="Instance number (1-5) for pixel marking, 0=disabled")
+    parser.add_argument("--shared", type=int, default=1,
+                        help="Number of daemons sharing this device (default 1). "
+                             "Each daemon will limit to 60/shared commands per minute.")
     args = parser.parse_args()
 
-    daemon = YeelightDaemon(args.ip, args.port, args.instance)
+    daemon = YeelightDaemon(args.ip, args.port, args.instance, args.shared)
 
     def signal_handler(sig, frame):
         print("\nShutting down...")
