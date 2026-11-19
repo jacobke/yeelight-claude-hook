@@ -28,6 +28,23 @@ SPEND_COLOR = (255, 0, 160)
 BALANCE_COLOR = (235, 235, 235)
 BLACK = (0, 0, 0)
 
+# 3x5 字形（row 0 = 顶部）；小数点用 1 列宽
+GLYPHS = {
+    "0": [[1, 1, 1], [1, 0, 1], [1, 0, 1], [1, 0, 1], [1, 1, 1]],
+    "1": [[0, 1, 0], [1, 1, 0], [0, 1, 0], [0, 1, 0], [1, 1, 1]],
+    "2": [[1, 1, 1], [0, 0, 1], [1, 1, 1], [1, 0, 0], [1, 1, 1]],
+    "3": [[1, 1, 1], [0, 0, 1], [1, 1, 1], [0, 0, 1], [1, 1, 1]],
+    "4": [[1, 0, 1], [1, 0, 1], [1, 1, 1], [0, 0, 1], [0, 0, 1]],
+    "5": [[1, 1, 1], [1, 0, 0], [1, 1, 1], [0, 0, 1], [1, 1, 1]],
+    "6": [[1, 1, 1], [1, 0, 0], [1, 1, 1], [1, 0, 1], [1, 1, 1]],
+    "7": [[1, 1, 1], [0, 0, 1], [0, 0, 1], [0, 0, 1], [0, 0, 1]],
+    "8": [[1, 1, 1], [1, 0, 1], [1, 1, 1], [1, 0, 1], [1, 1, 1]],
+    "9": [[1, 1, 1], [1, 0, 1], [1, 1, 1], [0, 0, 1], [1, 1, 1]],
+    ".": [[0], [0], [0], [0], [1]],
+    "K": [[1, 0, 1], [1, 0, 1], [1, 1, 0], [1, 0, 1], [1, 0, 1]],
+    "M": [[1, 0, 1], [1, 1, 1], [1, 0, 1], [1, 0, 1], [1, 0, 1]],
+}
+
 
 class DeepSeekError(Exception):
     """余额查询或解析失败"""
@@ -176,3 +193,53 @@ def compose_page(spend, balance):
     if text_width(balance_alt) > USABLE_WIDTH:
         balance_alt = abbreviate(balance)
     return "alternate", [spend_alt, balance_alt]
+
+
+def _draw_text(grid, text, col0, color):
+    """从 col0 开始，把 text 画在 5 行的垂直居中位置"""
+    col = col0
+    for ch in text:
+        glyph = GLYPHS.get(ch)
+        if glyph is None:
+            col += 4
+            continue
+        width = len(glyph[0])
+        for row_idx, row_data in enumerate(glyph):
+            phys_row = ROWS - 1 - row_idx
+            for bit_idx, value in enumerate(row_data):
+                if not value:
+                    continue
+                px_col = col + bit_idx
+                if 0 <= px_col < COLS:
+                    grid[phys_row * COLS + px_col] = color
+        col += width + 1
+
+
+def render_page(mode, texts, index=0):
+    """渲染 DeepSeek 页 → 100 个 (r, g, b) 像素
+
+    mode == "side"       texts[0] 品红居左、texts[1] 白色居右，中间 1 列分隔
+    mode == "alternate"  只显示 texts[index]，index 0 = 品红消费，1 = 白余额
+    """
+    grid = [BLACK] * (ROWS * COLS)
+
+    if mode == "alternate":
+        text = texts[index] if 0 <= index < len(texts) else ""
+        if not text:
+            return grid
+        color = SPEND_COLOR if index == 0 else BALANCE_COLOR
+        start = (USABLE_WIDTH - text_width(text)) // 2
+        _draw_text(grid, text, start, color)
+        return grid
+
+    left = texts[0] if texts else ""
+    right = texts[1] if len(texts) > 1 else ""
+    left_w = text_width(left)
+    right_w = text_width(right)
+    total = left_w + (1 + right_w if right else 0)
+    start = (USABLE_WIDTH - total) // 2
+    if left:
+        _draw_text(grid, left, start, SPEND_COLOR)
+    if right:
+        _draw_text(grid, right, start + left_w + 1, BALANCE_COLOR)
+    return grid

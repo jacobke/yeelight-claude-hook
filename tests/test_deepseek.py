@@ -238,5 +238,81 @@ class TestComposeWidthInvariant(unittest.TestCase):
                     "并排超宽 spend=%s balance=%s" % (spend, balance))
 
 
+class TestRenderPage(unittest.TestCase):
+    def test_returns_100_pixels(self):
+        self.assertEqual(len(deepseek.render_page("side", ["3.2", "58"])), 100)
+
+    def test_last_column_always_black(self):
+        for mode, texts, index in (
+            ("side", ["3.2", "58"], 0),
+            ("alternate", ["123", "456"], 0),
+            ("alternate", ["123", "456"], 1),
+        ):
+            grid = deepseek.render_page(mode, texts, index)
+            for row in range(deepseek.ROWS):
+                self.assertEqual(
+                    grid[row * deepseek.COLS + deepseek.COLS - 1],
+                    deepseek.BLACK, "%s/%s 的 col19 应为黑" % (mode, index))
+
+    def test_side_uses_both_colors(self):
+        grid = deepseek.render_page("side", ["3.2", "58"])
+        colors = {px for px in grid if px != deepseek.BLACK}
+        self.assertEqual(colors, {deepseek.SPEND_COLOR, deepseek.BALANCE_COLOR})
+
+    def test_alternate_index_selects_color(self):
+        spend_grid = deepseek.render_page("alternate", ["123", "456"], 0)
+        balance_grid = deepseek.render_page("alternate", ["123", "456"], 1)
+        spend_colors = {px for px in spend_grid if px != deepseek.BLACK}
+        balance_colors = {px for px in balance_grid if px != deepseek.BLACK}
+        self.assertEqual(spend_colors, {deepseek.SPEND_COLOR})
+        self.assertEqual(balance_colors, {deepseek.BALANCE_COLOR})
+
+    def test_empty_page_is_black(self):
+        grid = deepseek.render_page("side", ["", ""])
+        self.assertEqual(set(grid), {deepseek.BLACK})
+
+    def test_glyphs_do_not_overflow(self):
+        # 最宽的合法组合也不能画到 col19 之外
+        grid = deepseek.render_page("side", ["123", "58"])
+        for row in range(deepseek.ROWS):
+            self.assertEqual(grid[row * deepseek.COLS + 19], deepseek.BLACK)
+
+
+class TestPaletteDisjointFromMiniMax(unittest.TestCase):
+    """DeepSeek 页的配色不得与 MiniMax 页的任何颜色重合"""
+
+    def test_no_overlap_with_minimax_palette(self):
+        import quota
+        minimax_colors = {
+            quota.GREEN, quota.YELLOW, quota.RED, quota.TEAL, quota.BLUE,
+            quota.PURPLE, quota.BLACK, quota.RESET_TRACK,
+        }
+        for _, color in quota.RESET_STOPS:
+            minimax_colors.add(color)
+
+        deepseek_colors = {deepseek.SPEND_COLOR, deepseek.BALANCE_COLOR}
+        overlap = deepseek_colors & minimax_colors
+        self.assertEqual(overlap, set(),
+                         "DeepSeek 配色与 MiniMax 重合: %s" % (overlap,))
+
+    def test_rendered_pixels_never_match_minimax(self):
+        import quota
+        minimax_colors = {quota.GREEN, quota.YELLOW, quota.RED, quota.TEAL,
+                          quota.BLUE, quota.PURPLE, quota.RESET_TRACK}
+        for _, color in quota.RESET_STOPS:
+            minimax_colors.add(color)
+
+        grids = [
+            deepseek.render_page("side", ["3.2", "58"]),
+            deepseek.render_page("alternate", ["123", "456"], 0),
+            deepseek.render_page("alternate", ["123", "456"], 1),
+        ]
+        for grid in grids:
+            for px in grid:
+                if px == deepseek.BLACK:
+                    continue
+                self.assertNotIn(px, minimax_colors)
+
+
 if __name__ == "__main__":
     unittest.main()
