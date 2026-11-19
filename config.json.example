@@ -9,5 +9,16 @@
     "api_key": "",
     "poll_interval": 300,
     "takeover_delay": 20
+  },
+  "deepseek": {
+    "enabled": true,
+    "api_base": "https://api.deepseek.com",
+    "api_key": "",
+    "poll_interval": 300,
+    "alternate_interval": 5,
+    "state_path": ""
+  },
+  "rotation": {
+    "interval": 10
   }
 }
