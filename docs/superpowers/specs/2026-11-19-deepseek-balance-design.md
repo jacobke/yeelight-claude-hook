@@ -69,14 +69,28 @@ def fetch_balance(api_key, api_base=DEFAULT_API_BASE, timeout=10.0) -> float:
 def parse_balance(body) -> float:
     """纯函数：响应体 → 余额；结构不符抛 DeepSeekError"""
 
-def format_amount(value, max_width=19) -> str:
-    """纯函数：金额 → 数字字符串（自动决定是否保留小数、是否用 K 缩写）"""
+def format_amount(value, allow_decimal=True) -> str:
+    """纯函数：金额 → 数字字符串（是否保留 1 位小数由 allow_decimal 决定）"""
 
-def compose_page(spend, balance) -> list[str]:
-    """纯函数：两段数字 → [消费字符串, 余额字符串]；超宽时按降级规则处理"""
+def abbreviate(value) -> str:
+    """纯函数：大额缩写 → '12.3K' / '1.2M'；< 10000 返回整数串"""
 
-def render_page(spend_str, balance_str) -> list[tuple[int, int, int]]:
-    """纯函数：→ 100 个像素"""
+def text_width(text) -> int:
+    """纯函数：数字串占用的列数（数字 3 列、小数点 1 列、间距 1 列）"""
+
+def compose_page(spend, balance) -> tuple[str, list[str]]:
+    """纯函数：→ (mode, texts)
+
+    mode = "side"  → texts = [消费串, 余额串]，两段并排
+    mode = "alternate" → texts = [消费串, 余额串]，轮流显示
+    """
+
+def render_page(mode, texts, index=0) -> list[tuple[int, int, int]]:
+    """纯函数：→ 100 个像素
+
+    mode == "side" 时忽略 index，两段并排；
+    mode == "alternate" 时按 index 取 texts[index] 单段居中。
+    """
 
 class SpendTracker:
     def __init__(self, state_path): ...
@@ -186,19 +200,43 @@ BALANCE_COLOR = (235, 235, 235)  # 白：余额
 
 两组数字之间另留 1 列分隔。
 
-| 场景 | 今日消费 | 余额 | 总宽 |
+| 场景 | 今日消费 | 余额 | 总宽 | 模式 |
+|---|---|---|---|---|
+| 消费 < 10，余额 < 100 | `3.2`（9） | `58`（7） | 9+1+7 = 17 ✓ | 并排 |
+| 消费 ≥ 10，余额 < 100 | `12`（7） | `58`（7） | 15 ✓ | 并排 |
+| 消费 3 位，余额 2 位 | `123`（11） | `58`（7） | 19 ✓ | 并排 |
+| 消费 3 位，余额 3 位 | `123`（11） | `456`（11） | 23 ✗ → 缩写后 11+1+11=23 ✗ | **轮流** |
+| 余额 4 位 | `3`（3） | `1234`（15） | 19 ✓ | 并排 |
+| 余额 5 位 | `3`（3） | `12345`（19） | 23 ✗ → 缩写 `12K`（11）→ 15 ✓ | 并排 |
+| 余额 7 位 | `3`（3） | `1.2M`（13） | 17 ✓ | 并排 |
+
+**降级顺序**：
+
+1. 消费保留 1 位小数（若 < 10），余额取整 → 两段并排
+2. 总宽 > 19 → 消费改为取整，重试
+3. 仍 > 19 → 余额改用缩写（见下），重试
+4. 仍 > 19 → **切换为轮流模式**（这一页内先显示消费，再显示余额）
+
+**余额缩写规则**（仅在前两步都放不下时才启用）：
+
+| 范围 | 形式 | 例 | 宽度 |
 |---|---|---|---|
-| 消费 < 10，余额 < 100 | `3.2`（9） | `58`（7） | 9+1+7 = 17 ✓ |
-| 消费 ≥ 10 | `12`（7） | `58`（7） | 15 ✓ |
-| 消费有小数、余额 4 位 | `3`（3） | `1234`（15） | 19 ✓ |
-| 余额 ≥ 10000 | `3`（3） | `12K`（11） | 15 ✓ |
+| < 10,000 | 整数 | `1234` | 15 |
+| 10,000 ~ 999,999 | `{v/1000:.0f}K`（**不带小数**） | `12345` → `12K` | 11 |
+| ≥ 1,000,000 | `{v/1e6:.1f}M` | `1234567` → `1.2M` | 13 |
 
-降级顺序：
+K 一定不带小数：带上小数后 `12.3K` 是 17 列，比原数字 `12345`（19 列）只省 2 列，
+起不到作用；不带小数时 `12K` 只有 11 列。M 保留 1 位小数是因为 7 位数字本身太大，
+而 `1.2M` 仍在 13 列。
 
-1. 首选：消费保留 1 位小数（若 < 10），余额取整
-2. 总宽 > 19 → 消费改为取整
-3. 仍 > 19 → 余额用 K 缩写（`12345` → `12K`），去掉消费小数
-4. 仍 > 19 → 只显示余额，居中
+字母 `K` 与 `M` 使用 3×5 字形（与数字同高）。
+
+**轮流模式**：
+
+- 消费占满 19 列，品红，显示 `alternate_interval`（默认 5 秒）
+- 余额占满 19 列，白，显示同样时长
+- 两个数字各自居中
+- 单个数最多 5 位整数（19 列）；6 位及以上走缩写规则
 
 ## 7. 调度与轮播
 
@@ -212,7 +250,10 @@ BALANCE_COLOR = (235, 235, 235)  # 白：余额
 | `deepseek_enabled` | 是否启用 |
 | `deepseek_tracker` | `SpendTracker` 实例 |
 | `deepseek_last_fetch_at` | 上次请求余额的时间戳 |
-| `last_deepseek_rendered` | 上次画出的（消费, 余额）组合，用于判断是否需要重绘 |
+| `last_deepseek_rendered` | 上次画出的（模式, 两段文本, 索引），用于判断是否需要重绘 |
+| `deepseek_subpage` | 轮流模式下的当前索引（0=消费，1=余额） |
+| `deepseek_subpage_started_at` | 当前子页开始显示的时间戳 |
+| `deepseek_alternate_interval` | 轮流模式下的子页切换间隔，默认 5 秒 |
 
 ### 7.2 显示循环
 
@@ -231,12 +272,18 @@ while running:
     if len(pages) > 1 and now - page_started_at >= rotation_interval:
         切到下一页；置需要重绘
 
+    if 当前页 == deepseek and 当前模式 == alternate:
+        if now - deepseek_subpage_started_at >= deepseek_alternate_interval:
+            deepseek_subpage ^= 1；置需要重绘
+
     if 当前页数据过期:
         拉取（失败则保留旧值）
 
     if 当前页的数据与上次绘制不同 or 需要重绘:
         接管屏幕并绘制
 ```
+
+模式由 `compose_page()` 根据当前金额决定；模式变化时索引重置为 0（先显示消费）。
 
 ### 7.3 与效果的交界
 
@@ -258,7 +305,8 @@ while running:
     "api_base": "https://api.deepseek.com",
     "api_key": "",
     "poll_interval": 300,
-    "state_path": ""
+    "state_path": "",
+    "alternate_interval": 5
   },
   "rotation": {
     "interval": 10
@@ -273,6 +321,7 @@ while running:
 | `enabled` | `--no-deepseek` → `config.json.deepseek.enabled` → `true`（但有 key 才真正启用） |
 | `poll_interval` | `config.json.deepseek.poll_interval` → `300` |
 | `state_path` | `config.json.deepseek.state_path` → 与 config 同目录的 `quota_state.json` |
+| `alternate_interval` | `config.json.deepseek.alternate_interval` → `5` |
 | `rotation.interval` | `--rotation-interval` → `config.json.rotation.interval` → `10` |
 
 新增命令行参数：`--deepseek-api-key`、`--deepseek-api-base`、`--no-deepseek`、`--rotation-interval`。
@@ -301,9 +350,12 @@ while running:
 | 对象 | 用例 |
 |---|---|
 | `parse_balance` | 正常；多币种时选 CNY；无 CNY 时取第一条；缺 `balance_infos`；空列表；`total_balance` 非数字；负数；超大值 |
-| `format_amount` | 0、0.04、3.2、12.5、99.9、100、1234、12345 的取整与 K 缩写规则 |
-| `compose_page` | §6.3 表中所有场景的宽度 ≤ 19；降级顺序正确 |
-| `render_page` | 返回 100 像素；col19 恒黑；只有品红与白两种非黑色；与 MiniMax 配色无交集 |
+| `format_amount` | 0、0.04、3.2、12.5、99.9、100、1234、12345 的取整规则 |
+| `abbreviate` | 9999→`9999`；10000→`10K`；12345→`12K`；999999→`1000K`；1000000→`1.0M`；1234567→`1.2M` |
+| `text_width` | `3.2`=9；`58`=7；`1234`=15；`12K`=11；`1.2M`=13 |
+| `compose_page` | §6.3 表中所有场景：模式选择正确、两段宽度 ≤ 19；3 位+3 位 → alternate；大额缩写后仍能并排 |
+| `render_page` | 返回 100 像素；col19 恒黑；只有品红与白两种非黑色；与 MiniMax 配色无交集；alternate 模式下 index 0/1 分别只出现对应颜色 |
+| 轮播子页 | alternate 模式下按间隔切换索引；side 模式不切换 |
 | `SpendTracker` | 首次运行；同日消费；充值调整；跨天重置；状态文件损坏；写入后能读回 |
 | 轮播 | 到点切页；效果期间不切；效果结束后回到第一页；只有一页时不轮播 |
 
