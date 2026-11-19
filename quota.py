@@ -147,15 +147,15 @@ def render_bar(interval_pct, weekly_pct):
     布局（物理行，row4 = 顶）：
         row4 ┐
         row3 ┘ 5 小时条（2px 厚，19 列）
-        row2   分隔行（空，col19 留给实例标记）
+        row2   分隔行（全黑；col19 整列留给实例标记）
         row1 ┐
         row0 ┘ 周条（2px 厚，19 列）
     """
     grid = [BLACK] * (ROWS * COLS)
 
     def draw(rows, pct, ramp):
+        pct = _clamp_pct(pct)
         color = level_color(pct, ramp)
-        pct = max(0, min(100, int(pct)))
         filled = int(BAR_WIDTH * pct / 100 + 0.5)
         for row in rows:
             for col in range(BAR_WIDTH):

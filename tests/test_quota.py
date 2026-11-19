@@ -402,9 +402,20 @@ class TestRenderBar(unittest.TestCase):
 
     def test_half_fill_is_ten_columns(self):
         grid = quota.render_bar(50, 50)
-        lit = sum(1 for col in range(quota.BAR_WIDTH)
-                  if grid[quota.ROW_TOP[0] * quota.COLS + col] != quota.BLACK)
-        self.assertEqual(lit, 10)
+        for row in quota.ROW_TOP + quota.ROW_BOTTOM:
+            lit = sum(1 for col in range(quota.BAR_WIDTH)
+                      if grid[row * quota.COLS + col] != quota.BLACK)
+            self.assertEqual(lit, 10, "row %d 的填充列数不对" % row)
+
+    def test_low_percent_rounding(self):
+        # int(19*pct/100+0.5) 的四舍五入边界：1%/2% 不够一列，3% 起亮一列
+        for pct, expected in ((1, 0), (2, 0), (3, 1)):
+            grid = quota.render_bar(pct, pct)
+            for row in quota.ROW_TOP + quota.ROW_BOTTOM:
+                lit = sum(1 for col in range(quota.BAR_WIDTH)
+                          if grid[row * quota.COLS + col] != quota.BLACK)
+                self.assertEqual(lit, expected,
+                                 "%d%% 在 row %d 的填充列数应为 %d" % (pct, row, expected))
 
     def test_last_column_always_black(self):
         grid = quota.render_bar(100, 100)
