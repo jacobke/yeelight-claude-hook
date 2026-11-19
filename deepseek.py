@@ -24,7 +24,7 @@ ROWS, COLS = 5, 20
 USABLE_WIDTH = COLS - 1            # col19 留给实例标记
 
 # 配色：品红 / 白，与 MiniMax 页的绿黄红青蓝紫完全错开
-SPEND_COLOR = (255, 0, 160)
+SPEND_COLOR = (200, 0, 128)
 BALANCE_COLOR = (235, 235, 235)
 BLACK = (0, 0, 0)
 

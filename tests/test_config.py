@@ -113,6 +113,30 @@ class TestResolveSettings(unittest.TestCase):
         self.assertTrue(s.quota_enabled)
         self.assertEqual(s.api_key, "")
 
+    def test_minimax_section_is_read(self):
+        cfg = {"minimax": {"api_key": "mm-key",
+                           "api_base": "https://api.minimaxi.com",
+                           "poll_interval": 120}}
+        s = app_config.resolve_settings(make_args(), cfg, env={}, claude_token="")
+        self.assertEqual(s.api_key, "mm-key")
+        self.assertEqual(s.api_base, "https://api.minimaxi.com")
+        self.assertEqual(s.poll_interval, 120)
+
+    def test_legacy_quota_section_still_works(self):
+        cfg = {"quota": {"api_key": "legacy-key"}}
+        s = app_config.resolve_settings(make_args(), cfg, env={}, claude_token="")
+        self.assertEqual(s.api_key, "legacy-key")
+
+    def test_minimax_section_wins_over_legacy_quota(self):
+        cfg = {"minimax": {"api_key": "new"}, "quota": {"api_key": "old"}}
+        s = app_config.resolve_settings(make_args(), cfg, env={}, claude_token="")
+        self.assertEqual(s.api_key, "new")
+
+    def test_malformed_minimax_section_falls_back_to_legacy(self):
+        cfg = {"minimax": "nope", "quota": {"api_key": "legacy"}}
+        s = app_config.resolve_settings(make_args(), cfg, env={}, claude_token="")
+        self.assertEqual(s.api_key, "legacy")
+
 
 class TestLoadConfig(unittest.TestCase):
     def test_missing_file_returns_empty(self):

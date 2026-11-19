@@ -3,7 +3,7 @@
   "port": 55443,
   "instance": 0,
   "shared": 1,
-  "quota": {
+  "minimax": {
     "enabled": true,
     "api_base": "https://api.minimaxi.com",
     "api_key": "",

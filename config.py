@@ -110,7 +110,10 @@ def resolve_settings(args, config, env=None, claude_token="", claude_env=None):
     """把命令行参数、配置文件、环境变量合成一份 Settings"""
     env = os.environ if env is None else env
 
-    quota_cfg = config.get("quota")
+    # MiniMax 的配置段叫 minimax；旧版本叫 quota，保留兼容
+    quota_cfg = config.get("minimax")
+    if not isinstance(quota_cfg, dict):
+        quota_cfg = config.get("quota")
     if not isinstance(quota_cfg, dict):
         quota_cfg = {}
 

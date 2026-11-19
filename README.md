@@ -153,7 +153,7 @@ Copy `config.json.example` to `config.json` and fill in your MiniMax subscriptio
 {
   "ip": "192.168.1.100",
   "instance": 0,
-  "quota": {
+  "minimax": {
     "enabled": true,
     "api_base": "https://api.minimaxi.com",
     "api_key": "sk-your-minimax-subscription-key",

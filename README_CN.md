@@ -157,7 +157,7 @@ python3 yeelight-client.py --state done
 {
   "ip": "192.168.1.100",
   "instance": 0,
-  "quota": {
+  "minimax": {
     "enabled": true,
     "api_base": "https://api.minimaxi.com",
     "api_key": "sk-your-minimax-subscription-key",
