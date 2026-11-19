@@ -243,3 +243,79 @@ def render_page(mode, texts, index=0):
     if right:
         _draw_text(grid, right, start + left_w + 1, BALANCE_COLOR)
     return grid
+
+
+class SpendTracker:
+    """追踪今日消费：当天起点余额 - 当前余额"""
+
+    def __init__(self, state_path):
+        self.state_path = state_path
+        self.date = ""
+        self.day_start = 0.0
+        self.last_balance = 0.0
+        self.load()
+
+    def load(self):
+        """读取状态文件；不存在或损坏时视为首次运行"""
+        try:
+            with open(self.state_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            self._reset()
+            return
+        if not isinstance(data, dict):
+            self._reset()
+            return
+        try:
+            self.date = str(data.get("date") or "")
+            self.day_start = float(data.get("day_start") or 0.0)
+            self.last_balance = float(data.get("last_balance") or 0.0)
+        except (TypeError, ValueError, OverflowError):
+            self._reset()
+
+    def _reset(self):
+        self.date = ""
+        self.day_start = 0.0
+        self.last_balance = 0.0
+
+    def update(self, balance, today):
+        """更新基线并返回今日消费"""
+        try:
+            balance = float(balance)
+        except (TypeError, ValueError, OverflowError):
+            return self.spent()
+
+        if self.date != today:
+            self.date = today
+            self.day_start = balance
+            self.last_balance = balance
+        else:
+            if balance > self.last_balance:
+                # 充值 / 退款：基线等额上调，已花金额不受影响
+                self.day_start += (balance - self.last_balance)
+            self.last_balance = balance
+
+        self.save()
+        return self.spent()
+
+    def spent(self):
+        """今日消费，保证非负"""
+        return max(0.0, self.day_start - self.last_balance)
+
+    def save(self):
+        """先写临时文件再原子替换；失败时只记日志，不影响内存中的数值"""
+        temp_path = self.state_path + ".tmp"
+        try:
+            parent = os.path.dirname(self.state_path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "date": self.date,
+                    "day_start": round(self.day_start, 2),
+                    "last_balance": round(self.last_balance, 2),
+                }, f)
+            os.replace(temp_path, self.state_path)
+        except OSError as e:
+            import sys
+            print("SpendTracker save failed: %s" % e, file=sys.stderr)

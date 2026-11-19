@@ -4,6 +4,7 @@
 import json
 import os
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -312,6 +313,76 @@ class TestPaletteDisjointFromMiniMax(unittest.TestCase):
                 if px == deepseek.BLACK:
                     continue
                 self.assertNotIn(px, minimax_colors)
+
+
+class TestSpendTracker(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.path = os.path.join(self.dir, "quota_state.json")
+
+    def test_first_run_sets_baseline(self):
+        t = deepseek.SpendTracker(self.path)
+        self.assertAlmostEqual(t.update(61.73, "2026-11-19"), 0.0)
+        self.assertAlmostEqual(t.day_start, 61.73)
+
+    def test_spend_accumulates_same_day(self):
+        t = deepseek.SpendTracker(self.path)
+        t.update(61.73, "2026-11-19")
+        self.assertAlmostEqual(t.update(60.00, "2026-11-19"), 1.73)
+        self.assertAlmostEqual(t.update(58.44, "2026-11-19"), 3.29)
+
+    def test_top_up_adjusts_baseline(self):
+        t = deepseek.SpendTracker(self.path)
+        t.update(61.73, "2026-11-19")
+        t.update(58.44, "2026-11-19")          # 花了 3.29
+        self.assertAlmostEqual(t.update(108.44, "2026-11-19"), 3.29,
+                               msg="充值 50 不应抵消已花的钱")
+        self.assertAlmostEqual(t.update(100.00, "2026-11-19"), 11.73,
+                               msg="充值后继续消费应继续累加")
+
+    def test_new_day_resets(self):
+        t = deepseek.SpendTracker(self.path)
+        t.update(61.73, "2026-11-19")
+        t.update(58.44, "2026-11-19")
+        self.assertAlmostEqual(t.update(58.44, "2026-11-20"), 0.0)
+        self.assertAlmostEqual(t.day_start, 58.44)
+
+    def test_state_persists_across_instances(self):
+        t1 = deepseek.SpendTracker(self.path)
+        t1.update(61.73, "2026-11-19")
+        t1.update(58.44, "2026-11-19")
+
+        t2 = deepseek.SpendTracker(self.path)
+        t2.load()
+        self.assertAlmostEqual(t2.day_start, 61.73)
+        self.assertAlmostEqual(t2.update(57.00, "2026-11-19"), 4.73)
+
+    def test_corrupt_state_treated_as_fresh(self):
+        with open(self.path, "w", encoding="utf-8") as f:
+            f.write("{not json")
+        t = deepseek.SpendTracker(self.path)
+        self.assertAlmostEqual(t.update(50.0, "2026-11-19"), 0.0)
+        self.assertAlmostEqual(t.day_start, 50.0)
+
+    def test_non_dict_state_treated_as_fresh(self):
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump([1, 2, 3], f)
+        t = deepseek.SpendTracker(self.path)
+        self.assertAlmostEqual(t.update(50.0, "2026-11-19"), 0.0)
+
+    def test_save_writes_readable_json(self):
+        t = deepseek.SpendTracker(self.path)
+        t.update(61.73, "2026-11-19")
+        with open(self.path, encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertEqual(data["date"], "2026-11-19")
+        self.assertAlmostEqual(data["day_start"], 61.73)
+
+    def test_spend_never_negative(self):
+        t = deepseek.SpendTracker(self.path)
+        t.update(50.0, "2026-11-19")
+        # 余额上涨但没归零基线（例如浮点抖动）时不应出现负数
+        self.assertGreaterEqual(t.spent(), 0.0)
 
 
 if __name__ == "__main__":
