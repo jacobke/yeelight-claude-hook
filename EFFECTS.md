@@ -56,6 +56,18 @@
 - **持续**: 3 秒
 - **触发**: 对话结束 (正常/错误/Token限制)
 
+### QUOTA (配额余量)
+- **颜色**: 按余量变化
+  - 5 小时窗口（暖色阶）: ≥50% 绿 `(0,255,120)` → ≥20% 黄 `(255,200,0)` → 否则 红 `(255,40,40)`
+  - 周窗口（冷色阶）: ≥50% 青 `(0,220,200)` → ≥20% 蓝 `(80,140,255)` → 否则 紫 `(170,80,255)`
+- **内容**: 上下两条 2px 厚的进度条
+  - 上 2 行（row4 + row3）= 5 小时滚动窗口剩余百分比
+  - 下 2 行（row1 + row0）= 周窗口剩余百分比
+  - 中间 row2 空出来，最右列 col19 留给实例标记
+- **数据源**: `GET {api_base}/v1/token_plan/remains`，默认每 5 分钟查询一次
+- **时机**: 仅在空闲时显示；hook 效果优先，效果结束后延迟 20 秒接管
+- **触发**: daemon 内置配额线程自动刷新；`--state quota` 可手动强制刷新
+
 ---
 
 ## 设计演进
@@ -180,4 +192,5 @@ python3 yeelight-hook.py --state wait --duration 5
 python3 yeelight-hook.py --state interrupt
 python3 yeelight-hook.py --state end
 python3 yeelight-hook.py --state off
+python3 yeelight-client.py --state quota
 ```

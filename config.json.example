@@ -1,4 +1,13 @@
 {
   "ip": "192.168.1.100",
-  "port": 55443
+  "port": 55443,
+  "instance": 0,
+  "shared": 1,
+  "quota": {
+    "enabled": true,
+    "api_base": "https://api.minimaxi.com",
+    "api_key": "",
+    "poll_interval": 300,
+    "takeover_delay": 20
+  }
 }
