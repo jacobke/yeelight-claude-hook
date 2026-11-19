@@ -213,7 +213,7 @@ def resolve_settings(args, config, env=None, claude_token="", claude_env=None):
     if transition_frames is None:
         transition_frames = _int_or_none(rot_cfg.get("transition_frames"))
     if transition_frames is None:
-        transition_frames = 5
+        transition_frames = 3
     transition_frames = max(0, transition_frames)
 
     if getattr(args, "no_deepseek", False):

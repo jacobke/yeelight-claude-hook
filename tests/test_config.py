@@ -189,7 +189,7 @@ class TestDeepSeekSettings(unittest.TestCase):
         self.assertEqual(s.deepseek_alternate_interval, 5)
         self.assertEqual(s.deepseek_state_path, "")
         self.assertEqual(s.rotation_interval, 10)
-        self.assertEqual(s.rotation_transition_frames, 5)
+        self.assertEqual(s.rotation_transition_frames, 3)
 
     def test_config_values(self):
         cfg = {"deepseek": {

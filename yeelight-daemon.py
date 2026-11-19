@@ -179,7 +179,7 @@ class YeelightDaemon:
                  deepseek_alternate_interval=deepseek.ALTERNATE_INTERVAL_DEFAULT,
                  deepseek_state_path="",
                  rotation_interval=10,
-                 transition_frames=5):
+                 transition_frames=3):
         self.ip = ip
         self.port = port
         self.instance = instance  # 实例编号 (0=不显示, 1-20=显示位置)
@@ -929,7 +929,7 @@ def main():
     parser.add_argument("--rotation-interval", type=int, default=None,
                         help="两页轮播间隔（秒，默认 10）")
     parser.add_argument("--transition-frames", type=int, default=None,
-                        help="切页交叉淡化帧数（默认 5，0 表示直接切换）")
+                        help="切页交叉淡化帧数（默认 3，0 表示直接切换）")
     parser.add_argument("--dry-run", action="store_true",
                         help="打印解析后的配置后退出，不连接设备")
     args = parser.parse_args()

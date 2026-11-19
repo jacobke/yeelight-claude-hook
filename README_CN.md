@@ -70,7 +70,7 @@ row0 |█████···············|
 - 基线保存在 `deepseek_state.json`（已 gitignore），重启 daemon 不会丢失
 - 金额较大时（3 位数 + 3 位数放不下）会自动改为同一页内轮流显示
 - 余额 5 位以上会缩写成 `12K` / `1.2M`
-- **切换效果**：两页之间做 5 帧交叉淡化（约 5 秒），不是硬切；用 `rotation.transition_frames` 调整，设 0 则直接切换
+- **切换效果**：两页之间做 3 帧交叉淡化（约 3 秒），不是硬切；用 `rotation.transition_frames` 调整，设 0 则直接切换
 
 **配置**：在 `config.json` 里加 `deepseek.api_key`。如果 `~/.claude/settings.json`
 已经把 Claude Code 指向 DeepSeek，会自动复用那个 key，不用额外配置。

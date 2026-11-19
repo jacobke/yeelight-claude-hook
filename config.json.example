@@ -20,6 +20,6 @@
   },
   "rotation": {
     "interval": 10,
-    "transition_frames": 5
+    "transition_frames": 3
   }
 }
