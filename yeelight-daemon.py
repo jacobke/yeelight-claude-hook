@@ -207,6 +207,7 @@ class YeelightDaemon:
             state_path = deepseek_state_path or os.path.join(
                 os.path.dirname(os.path.abspath(__file__)), "quota_state.json")
             self.deepseek_tracker = deepseek.SpendTracker(state_path)
+        self.direct_mode_ready = False
         self.deepseek_balance = None
         self.deepseek_spend = 0.0
         self.deepseek_last_fetch_at = 0.0
@@ -289,6 +290,7 @@ class YeelightDaemon:
     def reconnect(self):
         """重连"""
         self.close()
+        self.direct_mode_ready = False
         time.sleep(1)
         return self.connect()
 
@@ -299,6 +301,7 @@ class YeelightDaemon:
             except:
                 pass
             self.sock = None
+        self.direct_mode_ready = False
 
     def send_command(self, method, params, retry=True):
         """发送命令（带频率限制和自动重连）"""
@@ -494,10 +497,12 @@ class YeelightDaemon:
         return quota.reset_fill_columns(reset_pct) != self.last_reset_fill
 
     def _takeover_and_send(self, grid):
-        """停掉设备端内置效果，回到 direct 模式并发送像素"""
-        self.send_command("stop_cf", [])
-        self.send_command("set_power", ["on"])
-        self.send_command("activate_fx_mode", [{"mode": "direct"}])
+        """必要时接管设备（停内置效果、进 direct 模式），然后发像素"""
+        if not self.direct_mode_ready:
+            self.send_command("stop_cf", [])
+            self.send_command("set_power", ["on"])
+            self.send_command("activate_fx_mode", [{"mode": "direct"}])
+            self.direct_mode_ready = True
         self.send_pixels_with_mark(grid)
 
     def paint_quota(self, snapshot):
@@ -718,6 +723,8 @@ class YeelightDaemon:
         self.interrupted = False  # 重置中断标志
         # 效果抢过了屏幕，回来后需要重画一次配额条
         self.quota_needs_repaint = True
+        # 效果会重配设备模式（尤其 complete 的 start_cf），需要重新接管
+        self.direct_mode_ready = False
 
         try:
             # 对于点阵效果，确保先进入 direct mode

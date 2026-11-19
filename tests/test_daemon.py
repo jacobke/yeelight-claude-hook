@@ -145,6 +145,46 @@ class TestQuotaTick(unittest.TestCase):
         self.assertFalse(d.display_tick())
 
 
+class TestTakeoverSequence(unittest.TestCase):
+    def _daemon(self):
+        d = make_daemon()
+        d.sent = []
+        d.command_interval = 0
+        d.direct_mode_ready = False
+        d.last_command_time = 0
+        d.command_count = 0
+
+        def fake_send(method, params):
+            d.sent.append(method)
+            return True
+
+        d.send_command = fake_send
+        return d
+
+    def test_takeover_sent_once(self):
+        d = self._daemon()
+        d._takeover_and_send([(0, 0, 0)] * 100)
+        d._takeover_and_send([(0, 0, 0)] * 100)
+        self.assertEqual(d.sent.count("activate_fx_mode"), 1)
+        self.assertEqual(d.sent.count("stop_cf"), 1)
+
+    def test_effect_resets_direct_mode_flag(self):
+        d = self._daemon()
+        d._takeover_and_send([(0, 0, 0)] * 100)
+        self.assertTrue(d.direct_mode_ready)
+        d.direct_mode_ready = False
+        d._takeover_and_send([(0, 0, 0)] * 100)
+        self.assertEqual(d.sent.count("activate_fx_mode"), 2)
+
+    def test_reconnect_clears_flag(self):
+        d = self._daemon()
+        d.direct_mode_ready = True
+        d.sock = None
+        d.connect = lambda: True
+        d.reconnect()
+        self.assertFalse(d.direct_mode_ready)
+
+
 class TestSnapshotCache(unittest.TestCase):
     def test_fresh_cache_is_reused(self):
         d = make_daemon()
