@@ -19,6 +19,8 @@ def make_args(**overrides):
         ip=None, port=None, instance=None, shared=None,
         quota_api_key=None, quota_api_base=None, quota_interval=None,
         no_quota=False,
+        deepseek_api_key=None, deepseek_api_base=None, no_deepseek=False,
+        rotation_interval=None,
     )
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -151,6 +153,101 @@ class TestReadClaudeSettingsToken(unittest.TestCase):
         with open(path, "w", encoding="utf-8") as f:
             json.dump({"other": {}}, f)
         self.assertEqual(app_config.read_claude_settings_token(path), "")
+
+
+class TestDeepSeekSettings(unittest.TestCase):
+    def test_defaults(self):
+        s = app_config.resolve_settings(make_args(), {}, env={}, claude_token="")
+        self.assertTrue(s.deepseek_enabled)
+        self.assertEqual(s.deepseek_api_base, "https://api.deepseek.com")
+        self.assertEqual(s.deepseek_api_key, "")
+        self.assertEqual(s.deepseek_poll_interval, 300)
+        self.assertEqual(s.deepseek_alternate_interval, 5)
+        self.assertEqual(s.deepseek_state_path, "")
+        self.assertEqual(s.rotation_interval, 10)
+
+    def test_config_values(self):
+        cfg = {"deepseek": {
+            "enabled": True,
+            "api_base": "https://example.com",
+            "api_key": "ds-key",
+            "poll_interval": 60,
+            "alternate_interval": 3,
+            "state_path": "/tmp/state.json",
+        }, "rotation": {"interval": 20}}
+        s = app_config.resolve_settings(make_args(), cfg, env={}, claude_token="")
+        self.assertEqual(s.deepseek_api_base, "https://example.com")
+        self.assertEqual(s.deepseek_api_key, "ds-key")
+        self.assertEqual(s.deepseek_poll_interval, 60)
+        self.assertEqual(s.deepseek_alternate_interval, 3)
+        self.assertEqual(s.deepseek_state_path, "/tmp/state.json")
+        self.assertEqual(s.rotation_interval, 20)
+
+    def test_env_key_wins_over_config(self):
+        cfg = {"deepseek": {"api_key": "from-config"}}
+        s = app_config.resolve_settings(make_args(), cfg,
+                                        env={"DEEPSEEK_API_KEY": "from-env"},
+                                        claude_token="")
+        self.assertEqual(s.deepseek_api_key, "from-env")
+
+    def test_cli_key_wins_over_env(self):
+        args = make_args(deepseek_api_key="from-cli")
+        s = app_config.resolve_settings(args, {},
+                                        env={"DEEPSEEK_API_KEY": "from-env"},
+                                        claude_token="")
+        self.assertEqual(s.deepseek_api_key, "from-cli")
+
+    def test_claude_token_reused_when_base_url_is_deepseek(self):
+        s = app_config.resolve_settings(
+            make_args(), {}, env={}, claude_token="claude-token",
+            claude_env={"ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+                        "ANTHROPIC_AUTH_TOKEN": "claude-token"})
+        self.assertEqual(s.deepseek_api_key, "claude-token")
+
+    def test_claude_token_ignored_for_other_providers(self):
+        s = app_config.resolve_settings(
+            make_args(), {}, env={}, claude_token="claude-token",
+            claude_env={"ANTHROPIC_BASE_URL": "https://api.minimaxi.com/anthropic",
+                        "ANTHROPIC_AUTH_TOKEN": "claude-token"})
+        self.assertEqual(s.deepseek_api_key, "")
+
+    def test_config_key_beats_claude_token(self):
+        cfg = {"deepseek": {"api_key": "from-config"}}
+        s = app_config.resolve_settings(
+            make_args(), cfg, env={}, claude_token="claude-token",
+            claude_env={"ANTHROPIC_BASE_URL": "https://api.deepseek.com",
+                        "ANTHROPIC_AUTH_TOKEN": "claude-token"})
+        self.assertEqual(s.deepseek_api_key, "from-config")
+
+    def test_no_deepseek_flag_disables(self):
+        s = app_config.resolve_settings(make_args(no_deepseek=True), {},
+                                        env={}, claude_token="")
+        self.assertFalse(s.deepseek_enabled)
+
+    def test_config_can_disable_deepseek(self):
+        cfg = {"deepseek": {"enabled": False}}
+        s = app_config.resolve_settings(make_args(), cfg, env={}, claude_token="")
+        self.assertFalse(s.deepseek_enabled)
+
+    def test_malformed_deepseek_section_ignored(self):
+        cfg = {"deepseek": "nope"}
+        s = app_config.resolve_settings(make_args(), cfg, env={}, claude_token="")
+        self.assertTrue(s.deepseek_enabled)
+        self.assertEqual(s.deepseek_api_key, "")
+
+
+class TestReadClaudeSettingsEnv(unittest.TestCase):
+    def test_reads_env(self):
+        path = os.path.join(tempfile.mkdtemp(), "settings.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"env": {"ANTHROPIC_BASE_URL": "https://x",
+                               "ANTHROPIC_AUTH_TOKEN": "t"}}, f)
+        env = app_config.read_claude_settings_env(path)
+        self.assertEqual(env["ANTHROPIC_BASE_URL"], "https://x")
+
+    def test_missing_file_returns_empty(self):
+        self.assertEqual(
+            app_config.read_claude_settings_env("/nonexistent/settings.json"), {})
 
 
 if __name__ == "__main__":
