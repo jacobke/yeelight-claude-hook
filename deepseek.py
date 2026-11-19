@@ -101,3 +101,78 @@ def fetch_balance(api_key, api_base=DEFAULT_API_BASE, timeout=10.0):
         raise DeepSeekError("DeepSeek API 返回的不是合法 JSON") from e
 
     return parse_balance(body)
+
+
+def _round_half_up(value):
+    """四舍五入。Python 内置 round() 是银行家舍入（12.5 → 12），金额显示不能用它"""
+    return int(value + 0.5)
+
+
+def format_amount(value, allow_decimal=True):
+    """金额 → 数字字符串。value < 10 且允许小数时保留 1 位小数"""
+    try:
+        value = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return "0"
+    if value != value:  # NaN
+        return "0"
+    if value < 0:
+        value = 0.0
+    if allow_decimal and value < 10:
+        return "%.1f" % value
+    return "%d" % _round_half_up(value)
+
+
+def abbreviate(value):
+    """大额缩写：< 1 万取整，1 万~100 万用 K（不带小数），>= 100 万用 M（1 位小数）"""
+    try:
+        value = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return "0"
+    if value != value or value < 0:
+        value = 0.0
+    if value < 10000:
+        return "%d" % _round_half_up(value)
+    if value < 1000000:
+        return "%dK" % _round_half_up(value / 1000.0)
+    return "%.1fM" % (value / 1000000.0)
+
+
+def text_width(text):
+    """数字串占用的列数：数字 3 列、小数点 1 列、字符间距 1 列"""
+    if not text:
+        return 0
+    return sum(1 if ch == "." else 3 for ch in text) + (len(text) - 1)
+
+
+def _fits_side(left, right):
+    return text_width(left) + 1 + text_width(right) <= USABLE_WIDTH
+
+
+def compose_page(spend, balance):
+    """把两个金额组合成一页 → (mode, [消费串, 余额串])
+
+    mode == "side"      两段并排
+    mode == "alternate" 同一页内轮流显示
+    """
+    spend_str = format_amount(spend, allow_decimal=True)
+    balance_str = format_amount(balance, allow_decimal=False)
+    if _fits_side(spend_str, balance_str):
+        return "side", [spend_str, balance_str]
+
+    spend_str = format_amount(spend, allow_decimal=False)
+    if _fits_side(spend_str, balance_str):
+        return "side", [spend_str, balance_str]
+
+    abbreviated = abbreviate(balance)
+    if _fits_side(spend_str, abbreviated):
+        return "side", [spend_str, abbreviated]
+
+    # 轮流模式：各自占满整行，保留小数；单个数太长时缩写
+    spend_alt = format_amount(spend, allow_decimal=True)
+    if text_width(spend_alt) > USABLE_WIDTH:
+        spend_alt = abbreviate(spend)
+    balance_alt = format_amount(balance, allow_decimal=False)
+    if text_width(balance_alt) > USABLE_WIDTH:
+        balance_alt = abbreviate(balance)
+    return "alternate", [spend_alt, balance_alt]
