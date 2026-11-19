@@ -10,6 +10,7 @@ Yeelight Daemon - 保持 TCP 长连接，支持效果中断
 import socket
 import json
 import base64
+import dataclasses
 import time
 import math
 import random
@@ -19,6 +20,9 @@ import os
 import signal
 import struct
 import threading
+
+import config as app_config
+import quota
 
 # ============================================================================
 # 配置
@@ -143,7 +147,10 @@ def render_centered_with_bg(text, text_color, bg_color):
 # ============================================================================
 
 class YeelightDaemon:
-    def __init__(self, ip, port=55443, instance=0, shared=1):
+    def __init__(self, ip, port=55443, instance=0, shared=1,
+                 quota_enabled=False, api_base=quota.DEFAULT_API_BASE,
+                 api_key="", poll_interval=quota.POLL_INTERVAL_DEFAULT,
+                 takeover_delay=quota.TAKEOVER_DELAY_DEFAULT):
         self.ip = ip
         self.port = port
         self.instance = instance  # 实例编号 (0=不显示, 1-20=显示位置)
@@ -159,6 +166,19 @@ class YeelightDaemon:
         # 命令间隔：默认 1 秒（每秒 1 命令 = 60/分钟）。
         # 共享模式下按 daemon 数量均分：shared=2 → 每 2 秒 1 命令（30/分钟）
         self.command_interval = float(self.shared)
+
+        # ===== MiniMax 配额条 =====
+        self.quota_enabled = quota_enabled and bool(api_key)
+        self.api_base = api_base
+        self.api_key = api_key
+        self.poll_interval = poll_interval
+        self.takeover_delay = takeover_delay
+        self.quota_thread = None            # 配额轮询线程
+        self.last_snapshot = None           # 最近一次成功拉到的快照（缓存）
+        self.last_rendered = None           # 最近一次画到屏幕上的快照
+        self.quota_needs_repaint = True     # 效果抢过屏幕后置位
+        self.last_quota_fetch_at = 0.0      # 最近一次尝试拉取的时间戳
+        self.last_effect_finished_at = time.time()  # 启动后立即允许显示配额条
 
     def mark_instance(self, grid, color=(255, 200, 50)):
         """在 grid 上标记实例编号（土豪金像素）
@@ -551,15 +571,46 @@ class YeelightDaemon:
 
 def main():
     parser = argparse.ArgumentParser(description="Yeelight Daemon")
-    parser.add_argument("--ip", default=DEFAULT_IP)
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
-    parser.add_argument("--instance", type=int, default=0, help="Instance number (1-5) for pixel marking, 0=disabled")
-    parser.add_argument("--shared", type=int, default=1,
+    parser.add_argument("--ip", default=None, help="设备 IP 地址")
+    parser.add_argument("--port", type=int, default=None, help="设备端口 (默认 55443)")
+    parser.add_argument("--instance", type=int, default=None,
+                        help="Instance number (1-5) for pixel marking, 0=disabled")
+    parser.add_argument("--shared", type=int, default=None,
                         help="Number of daemons sharing this device (default 1). "
                              "Each daemon will limit to 60/shared commands per minute.")
+    parser.add_argument("--config", default=None,
+                        help="配置文件路径 (默认: 脚本同目录的 config.json)")
+    parser.add_argument("--quota-api-key", default=None, help="MiniMax API key")
+    parser.add_argument("--quota-api-base", default=None, help="MiniMax API 域名")
+    parser.add_argument("--quota-interval", type=int, default=None,
+                        help="配额轮询间隔（秒，默认 300）")
+    parser.add_argument("--no-quota", action="store_true", help="关闭配额条功能")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="打印解析后的配置后退出，不连接设备")
     args = parser.parse_args()
 
-    daemon = YeelightDaemon(args.ip, args.port, args.instance, args.shared)
+    cfg = app_config.load_config(args.config)
+    settings = app_config.resolve_settings(
+        args, cfg, claude_token=app_config.read_claude_settings_token())
+
+    if args.dry_run:
+        data = dataclasses.asdict(settings)
+        key = data.get("api_key") or ""
+        if key:
+            # 打码，避免把完整 key 留在终端记录里
+            data["api_key"] = "%s...%s" % (key[:6], key[-4:])
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+        return 0
+
+    if not settings.ip:
+        print("Error: device IP not specified (use --ip or config.json)",
+              file=sys.stderr)
+        return 1
+
+    daemon = YeelightDaemon(
+        settings.ip, settings.port, settings.instance, settings.shared,
+        settings.quota_enabled, settings.api_base, settings.api_key,
+        settings.poll_interval, settings.takeover_delay)
 
     def signal_handler(sig, frame):
         print("\nShutting down...")
