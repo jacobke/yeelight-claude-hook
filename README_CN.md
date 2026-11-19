@@ -25,6 +25,7 @@
 - ⚡ **实时响应** - 效果可中断，新命令立即生效
 - 🔌 **长连接** - Daemon 模式避免设备连接配额限制
 - 🔢 **实例标记** - 土豪金像素显示 Claude Code 实例编号 (1-5)
+- 📊 **配额进度条** - 展示 MiniMax Token Plan 剩余额度
 
 ## 效果预览
 
@@ -37,6 +38,20 @@
 | complete | 绿色呼吸 | 绿色 | 内置呼吸效果（无限循环） |
 | interrupt | ERROR | 红色 | 快闪 5 次 |
 | end | END | 红色 | 渐出关灯 |
+
+## 配额进度条
+
+空闲时，灯上显示 MiniMax Token Plan 的剩余额度：上 2 行是 5 小时滚动窗口，
+下 2 行是周窗口。条的长度就是剩余百分比，颜色随余量变紧张
+（5h 绿→黄→红，周 青→蓝→紫）。
+
+```
+row4 |██████████████······|   ← 5 小时窗口
+row3 |██████████████······|
+row2 |····················|
+row1 |█████···············|   ← 周窗口
+row0 |█████···············|
+```
 
 ## 快速开始
 
@@ -106,6 +121,48 @@ launchctl load ~/Library/LaunchAgents/com.yeelight.daemon.plist
 python3 yeelight-client.py --state done
 ```
 
+### 5. 配额进度条（可选）
+
+把 `config.json.example` 复制成 `config.json`，填入 MiniMax 订阅 key
+（`config.json` 已在 .gitignore 中）：
+
+```json
+{
+  "ip": "192.168.1.100",
+  "instance": 0,
+  "quota": {
+    "enabled": true,
+    "api_base": "https://api.minimaxi.com",
+    "api_key": "sk-your-minimax-subscription-key",
+    "poll_interval": 300,
+    "takeover_delay": 20
+  }
+}
+```
+
+必须用 Token Plan 页面上的**订阅 key**，按量计费的 API key 会被配额接口拒绝。
+国际站请把 `api_base` 改成 `https://api.minimax.io`。
+
+API key 的取值顺序：`--quota-api-key` → 环境变量 `MINIMAX_API_KEY` →
+`config.json` → `~/.claude/settings.json` 里的 `ANTHROPIC_AUTH_TOKEN`
+（如果你已经把 Claude Code 指向 MiniMax，这条是零配置捷径）。
+
+查看 daemon 解析出的配置（不连设备）：
+
+```bash
+python3 yeelight-daemon.py --dry-run
+```
+
+手动强制刷新一次：
+
+```bash
+python3 yeelight-client.py --state quota
+```
+
+配额条只在灯空闲时显示 —— hook 效果优先，效果结束后（延迟 `takeover_delay` 秒，
+让"任务完成"的绿色呼吸灯多亮一会儿）配额条再接管。接口不可达时灯会继续显示上一次
+的读数，而不是熄灭。
+
 ## 文件说明
 
 | 文件 | 说明 |
@@ -114,6 +171,8 @@ python3 yeelight-client.py --state done
 | `yeelight-client.py` | 客户端，通过 Unix Socket 通信 |
 | `yeelight-hook.py` | 独立脚本模式（备用） |
 | `discover.py` | 发现局域网内的 Yeelight 设备 |
+| `quota.py` | MiniMax 配额查询与进度条渲染 |
+| `config.py` | 配置加载（config.json、环境变量、命令行） |
 | `com.yeelight.daemon.plist.template` | launchd 配置模板 |
 
 ## 架构说明

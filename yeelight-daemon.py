@@ -10,6 +10,7 @@ Yeelight Daemon - 保持 TCP 长连接，支持效果中断
 import socket
 import json
 import base64
+import dataclasses
 import time
 import math
 import random
@@ -20,6 +21,9 @@ import signal
 import struct
 import threading
 
+import config as app_config
+import quota
+
 # ============================================================================
 # 配置
 # ============================================================================
@@ -28,6 +32,12 @@ DEFAULT_IP = None  # 必须通过 --ip 参数或配置文件指定
 DEFAULT_PORT = 55443
 SOCKET_PATH = "/tmp/yeelight.sock"
 ROWS, COLS = 5, 20
+
+# 所有可用的效果状态
+VALID_STATES = [
+    "start", "thinking", "done", "wait", "interrupt",
+    "complete", "end", "off", "quota",
+]
 
 # ============================================================================
 # 3x5 字体
@@ -143,7 +153,10 @@ def render_centered_with_bg(text, text_color, bg_color):
 # ============================================================================
 
 class YeelightDaemon:
-    def __init__(self, ip, port=55443, instance=0, shared=1):
+    def __init__(self, ip, port=55443, instance=0, shared=1,
+                 quota_enabled=False, api_base=quota.DEFAULT_API_BASE,
+                 api_key="", poll_interval=quota.POLL_INTERVAL_DEFAULT,
+                 takeover_delay=quota.TAKEOVER_DELAY_DEFAULT):
         self.ip = ip
         self.port = port
         self.instance = instance  # 实例编号 (0=不显示, 1-20=显示位置)
@@ -159,6 +172,20 @@ class YeelightDaemon:
         # 命令间隔：默认 1 秒（每秒 1 命令 = 60/分钟）。
         # 共享模式下按 daemon 数量均分：shared=2 → 每 2 秒 1 命令（30/分钟）
         self.command_interval = float(self.shared)
+
+        # ===== MiniMax 配额条 =====
+        self.quota_enabled = quota_enabled and bool(api_key)
+        self.api_base = api_base
+        self.api_key = api_key
+        self.poll_interval = poll_interval
+        self.takeover_delay = takeover_delay
+        self.quota_thread = None            # 配额轮询线程
+        self.last_snapshot = None           # 最近一次成功拉到的快照（缓存）
+        self.last_rendered = None           # 最近一次画到屏幕上的快照
+        self.last_reset_fill = None         # 最近一次画出的重置倒计时列数
+        self.quota_needs_repaint = True     # 效果抢过屏幕后置位
+        self.last_quota_fetch_at = 0.0      # 最近一次尝试拉取的时间戳
+        self.last_effect_finished_at = time.time()  # 启动后立即允许显示配额条
 
     def mark_instance(self, grid, color=(255, 200, 50)):
         """在 grid 上标记实例编号（土豪金像素）
@@ -308,6 +335,98 @@ class YeelightDaemon:
         self.send_pixels(grid)
 
     # ========================================================================
+    # MiniMax 配额条
+    # ========================================================================
+
+    def quota_snapshot_if_available(self, now=None):
+        """取当前可用的配额快照（带缓存）。
+
+        缓存新鲜时直接复用；过期时请求接口。请求失败时返回上一次成功的快照
+        （可能为 None），这样接口临时故障不会让画面消失。
+        """
+        if now is None:
+            now = time.time()
+        if (self.last_snapshot is not None
+                and now - self.last_quota_fetch_at < self.poll_interval):
+            return self.last_snapshot
+
+        try:
+            snapshot = quota.fetch_quota(self.api_key, self.api_base)
+        except quota.QuotaError as e:
+            print("Quota fetch failed: %s" % e, file=sys.stderr, flush=True)
+            # 失败也要等一个轮询周期再重试
+            self.last_quota_fetch_at = now
+            return self.last_snapshot
+
+        self.last_snapshot = snapshot
+        self.last_quota_fetch_at = now
+        return snapshot
+
+    def quota_should_paint(self, now=None):
+        """判断当前是否应该画一次配额条（不产生绘制副作用）"""
+        if not self.quota_enabled:
+            return False
+        if self.effect_thread and self.effect_thread.is_alive():
+            return False
+        if now is None:
+            now = time.time()
+        if now - self.last_effect_finished_at < self.takeover_delay:
+            return False
+        snapshot = self.quota_snapshot_if_available(now)
+        if snapshot is None:
+            return False
+        if snapshot.differs_from(self.last_rendered) or self.quota_needs_repaint:
+            return True
+        # 配额百分比没变，但重置倒计时可能已经走了一格
+        reset_pct = quota.reset_progress_pct(snapshot.interval_reset_at,
+                                             now_ms=int(now * 1000))
+        return quota.reset_fill_columns(reset_pct) != self.last_reset_fill
+
+    def paint_quota(self, snapshot):
+        """接管屏幕并画出配额条"""
+        now = time.time()
+        reset_pct = quota.reset_progress_pct(snapshot.interval_reset_at,
+                                             now_ms=int(now * 1000))
+        grid = quota.render_bar(snapshot.interval_pct, snapshot.weekly_pct,
+                                reset_pct)
+        # 接管序列：停掉设备端内置效果（complete 的绿色呼吸），回到 direct 模式
+        self.send_command("stop_cf", [])
+        self.send_command("set_power", ["on"])
+        self.send_command("activate_fx_mode", [{"mode": "direct"}])
+        self.send_pixels_with_mark(grid)
+        self.last_rendered = snapshot
+        self.last_reset_fill = quota.reset_fill_columns(reset_pct)
+        self.quota_needs_repaint = False
+
+    def quota_tick(self):
+        """配额线程的一轮：判断并（必要时）绘制一次配额条。返回是否绘制了"""
+        if not self.quota_should_paint():
+            return False
+        snapshot = self.quota_snapshot_if_available()
+        if snapshot is None:
+            return False
+        self.paint_quota(snapshot)
+        return True
+
+    def quota_loop(self):
+        """配额线程主循环"""
+        while self.running:
+            time.sleep(1)
+            try:
+                self.quota_tick()
+            except Exception as e:
+                print("Quota loop error: %s" % e, file=sys.stderr, flush=True)
+
+    def start_quota_thread(self):
+        """启动配额线程（未配置 API key 时不启动）"""
+        if not self.quota_enabled:
+            print("Quota meter disabled (no API key or --no-quota)",
+                  file=sys.stderr, flush=True)
+            return
+        self.quota_thread = threading.Thread(target=self.quota_loop, daemon=True)
+        self.quota_thread.start()
+
+    # ========================================================================
     # 效果方法
     # ========================================================================
 
@@ -440,6 +559,14 @@ class YeelightDaemon:
         # count=0 无限循环, action=1 保持最后状态（亮）
         self.send_command("start_cf", [0, 1, flow_string])
 
+    def effect_quota(self):
+        """立即绘制一次配额条（调试 / 手动刷新用）"""
+        snapshot = self.quota_snapshot_if_available()
+        if snapshot is None:
+            print("No quota data available", file=sys.stderr, flush=True)
+            return
+        self.paint_quota(snapshot)
+
     def effect_end(self, duration=2.0):
         """红色渐出"""
         steps = 15
@@ -461,38 +588,45 @@ class YeelightDaemon:
     def run_effect(self, state, duration=5.0):
         """运行效果（在独立线程中）"""
         self.interrupted = False  # 重置中断标志
+        # 效果抢过了屏幕，回来后需要重画一次配额条
+        self.quota_needs_repaint = True
 
-        # 对于点阵效果，确保先进入 direct mode
-        # complete 使用内置效果，不需要 direct mode
-        if state not in ["complete", "off"]:
-            self.send_command("stop_cf", [])  # 停止内置效果
-            time.sleep(0.1)
-            self.send_command("set_power", ["on"])
-            time.sleep(0.1)
-            self.send_command("activate_fx_mode", [{"mode": "direct"}])
-            time.sleep(0.2)
+        try:
+            # 对于点阵效果，确保先进入 direct mode
+            # complete 使用内置效果，不需要 direct mode
+            if state not in ["complete", "off", "quota"]:
+                self.send_command("stop_cf", [])  # 停止内置效果
+                time.sleep(0.1)
+                self.send_command("set_power", ["on"])
+                time.sleep(0.1)
+                self.send_command("activate_fx_mode", [{"mode": "direct"}])
+                time.sleep(0.2)
 
-        handlers = {
-            "start": lambda: self.effect_start(duration),
-            "thinking": lambda: self.effect_thinking(duration),
-            "done": lambda: self.effect_done(),
-            "wait": lambda: self.effect_wait(duration),
-            "interrupt": lambda: self.effect_interrupt(),
-            "complete": lambda: self.effect_complete(),
-            "end": lambda: self.effect_end(duration),
-            "off": lambda: self.effect_off(),
-        }
+            handlers = {
+                "start": lambda: self.effect_start(duration),
+                "thinking": lambda: self.effect_thinking(duration),
+                "done": lambda: self.effect_done(),
+                "wait": lambda: self.effect_wait(duration),
+                "interrupt": lambda: self.effect_interrupt(),
+                "complete": lambda: self.effect_complete(),
+                "end": lambda: self.effect_end(duration),
+                "off": lambda: self.effect_off(),
+                "quota": lambda: self.effect_quota(),
+            }
 
-        handler = handlers.get(state)
-        if handler:
-            handler()
+            handler = handlers.get(state)
+            if handler:
+                handler()
+        finally:
+            # 记录效果结束时间，配额线程据此判断保护期
+            self.last_effect_finished_at = time.time()
 
     def handle_command(self, cmd):
         """处理命令"""
         state = cmd.get("state")
         duration = cmd.get("duration", 5.0)
 
-        if state not in ["start", "thinking", "done", "wait", "interrupt", "complete", "end", "off"]:
+        if state not in VALID_STATES:
             return {"status": "error", "message": f"Unknown state: {state}"}
 
         # 中断当前效果
@@ -551,15 +685,46 @@ class YeelightDaemon:
 
 def main():
     parser = argparse.ArgumentParser(description="Yeelight Daemon")
-    parser.add_argument("--ip", default=DEFAULT_IP)
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
-    parser.add_argument("--instance", type=int, default=0, help="Instance number (1-5) for pixel marking, 0=disabled")
-    parser.add_argument("--shared", type=int, default=1,
+    parser.add_argument("--ip", default=None, help="设备 IP 地址")
+    parser.add_argument("--port", type=int, default=None, help="设备端口 (默认 55443)")
+    parser.add_argument("--instance", type=int, default=None,
+                        help="Instance number (1-5) for pixel marking, 0=disabled")
+    parser.add_argument("--shared", type=int, default=None,
                         help="Number of daemons sharing this device (default 1). "
                              "Each daemon will limit to 60/shared commands per minute.")
+    parser.add_argument("--config", default=None,
+                        help="配置文件路径 (默认: 脚本同目录的 config.json)")
+    parser.add_argument("--quota-api-key", default=None, help="MiniMax API key")
+    parser.add_argument("--quota-api-base", default=None, help="MiniMax API 域名")
+    parser.add_argument("--quota-interval", type=int, default=None,
+                        help="配额轮询间隔（秒，默认 300）")
+    parser.add_argument("--no-quota", action="store_true", help="关闭配额条功能")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="打印解析后的配置后退出，不连接设备")
     args = parser.parse_args()
 
-    daemon = YeelightDaemon(args.ip, args.port, args.instance, args.shared)
+    cfg = app_config.load_config(args.config)
+    settings = app_config.resolve_settings(
+        args, cfg, claude_token=app_config.read_claude_settings_token())
+
+    if args.dry_run:
+        data = dataclasses.asdict(settings)
+        key = data.get("api_key") or ""
+        if key:
+            # 打码，避免把完整 key 留在终端记录里
+            data["api_key"] = "%s...%s" % (key[:6], key[-4:])
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+        return 0
+
+    if not settings.ip:
+        print("Error: device IP not specified (use --ip or config.json)",
+              file=sys.stderr)
+        return 1
+
+    daemon = YeelightDaemon(
+        settings.ip, settings.port, settings.instance, settings.shared,
+        settings.quota_enabled, settings.api_base, settings.api_key,
+        settings.poll_interval, settings.takeover_delay)
 
     def signal_handler(sig, frame):
         print("\nShutting down...")
@@ -572,6 +737,7 @@ def main():
         return 1
 
     daemon.activate_direct_mode()
+    daemon.start_quota_thread()
     daemon.run_server()
 
     return 0

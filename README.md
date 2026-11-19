@@ -25,6 +25,7 @@
 - ⚡ **Real-time Response** - Interruptible effects, new commands take effect immediately
 - 🔌 **Long Connection** - Daemon mode avoids device connection quota limits
 - 🔢 **Instance Marking** - Gold pixel shows Claude Code instance number (1-5)
+- 📊 **Quota Meter** - Progress bars show remaining MiniMax Token Plan allowance
 
 ## Demo
 
@@ -36,6 +37,21 @@
 | INPUT | Purple wave | Waiting for user input |
 | Complete | Green breathing (infinite) | Task completed successfully |
 | ERROR | Red flashing | Error occurred |
+
+### Token Plan Meter
+
+When the lamp is idle, it shows your remaining MiniMax Token Plan allowance as two
+progress bars — the 5-hour rolling window on top, the weekly window below. The bar
+length is the remaining percentage; the color tracks how urgent it is
+(green → yellow → red for the 5-hour window, cyan → blue → purple for the weekly one).
+
+```
+row4 |██████████████······|   ← 5-hour window
+row3 |██████████████······|
+row2 |····················|
+row1 |█████···············|   ← weekly window
+row0 |█████···············|
+```
 
 ## Quick Start
 
@@ -105,6 +121,51 @@ Add to `~/.claude/settings.json`:
 python3 yeelight-client.py --state done
 ```
 
+### 5. Token Plan Meter (Optional)
+
+Copy `config.json.example` to `config.json` and fill in your MiniMax subscription key
+(`config.json` is git-ignored):
+
+```json
+{
+  "ip": "192.168.1.100",
+  "instance": 0,
+  "quota": {
+    "enabled": true,
+    "api_base": "https://api.minimaxi.com",
+    "api_key": "sk-your-minimax-subscription-key",
+    "poll_interval": 300,
+    "takeover_delay": 20
+  }
+}
+```
+
+Use a **subscription key** from the Token Plan page, not a pay-as-you-go API key —
+the quota endpoint rejects the latter. For the international site use
+`https://api.minimax.io` as `api_base`.
+
+The API key is resolved in this order: `--quota-api-key` → `MINIMAX_API_KEY`
+environment variable → `config.json` → `ANTHROPIC_AUTH_TOKEN` in
+`~/.claude/settings.json` (a zero-config shortcut if you already point Claude Code at
+MiniMax).
+
+Check what the daemon resolved without touching the device:
+
+```bash
+python3 yeelight-daemon.py --dry-run
+```
+
+Force an immediate repaint:
+
+```bash
+python3 yeelight-client.py --state quota
+```
+
+The meter only paints while the lamp is idle — hook effects take priority, and the
+meter returns once they finish (after `takeover_delay` seconds, so the green
+"task complete" breathing light stays visible for a while). If the API cannot be
+reached the lamp keeps showing the last good reading rather than going dark.
+
 ## Files
 
 | File | Description |
@@ -113,6 +174,8 @@ python3 yeelight-client.py --state done
 | `yeelight-client.py` | Client for Unix Socket communication |
 | `yeelight-hook.py` | Standalone script (not recommended) |
 | `discover.py` | Discover Yeelight devices on LAN |
+| `quota.py` | MiniMax Token Plan client and quota bar rendering |
+| `config.py` | Configuration loading (config.json, env vars, CLI) |
 | `com.yeelight.daemon.plist.template` | launchd template |
 
 ## Architecture

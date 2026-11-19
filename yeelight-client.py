@@ -34,7 +34,8 @@ def send_command(state, duration=5.0):
 def main():
     parser = argparse.ArgumentParser(description="Yeelight Client")
     parser.add_argument("--state", "-s", required=True,
-                        choices=['start', 'thinking', 'done', 'wait', 'interrupt', 'complete', 'end', 'off'])
+                        choices=['start', 'thinking', 'done', 'wait', 'interrupt',
+                                 'complete', 'end', 'off', 'quota'])
     parser.add_argument("--duration", "-d", type=float, default=5.0)
 
     args = parser.parse_args()
