@@ -41,6 +41,7 @@ class Settings:
     deepseek_alternate_interval: int
     deepseek_state_path: str
     rotation_interval: int
+    rotation_transition_frames: int
 
 
 def default_config_path():
@@ -208,6 +209,13 @@ def resolve_settings(args, config, env=None, claude_token="", claude_env=None):
     if rotation_interval is None:
         rotation_interval = 10
 
+    transition_frames = _int_or_none(getattr(args, "transition_frames", None))
+    if transition_frames is None:
+        transition_frames = _int_or_none(rot_cfg.get("transition_frames"))
+    if transition_frames is None:
+        transition_frames = 5
+    transition_frames = max(0, transition_frames)
+
     if getattr(args, "no_deepseek", False):
         deepseek_enabled = False
     elif "enabled" in ds_cfg:
@@ -232,4 +240,5 @@ def resolve_settings(args, config, env=None, claude_token="", claude_env=None):
         deepseek_alternate_interval=deepseek_alternate_interval,
         deepseek_state_path=deepseek_state_path,
         rotation_interval=rotation_interval,
+        rotation_transition_frames=transition_frames,
     )

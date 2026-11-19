@@ -35,6 +35,18 @@ SOCKET_PATH = "/tmp/yeelight.sock"
 ROWS, COLS = 5, 20
 
 # 所有可用的效果状态
+def blend_grids(a, b, alpha):
+    """按 alpha（0..1）线性混合两帧像素；alpha=0 返回 a，alpha=1 返回 b"""
+    alpha = max(0.0, min(1.0, alpha))
+    if alpha <= 0:
+        return list(a)
+    if alpha >= 1:
+        return list(b)
+    inv = 1.0 - alpha
+    return [tuple(int(x * inv + y * alpha) for x, y in zip(pa, pb))
+            for pa, pb in zip(a, b)]
+
+
 VALID_STATES = [
     "start", "thinking", "done", "wait", "interrupt",
     "complete", "end", "off", "minimax",
@@ -166,7 +178,8 @@ class YeelightDaemon:
                  deepseek_poll_interval=deepseek.POLL_INTERVAL_DEFAULT,
                  deepseek_alternate_interval=deepseek.ALTERNATE_INTERVAL_DEFAULT,
                  deepseek_state_path="",
-                 rotation_interval=10):
+                 rotation_interval=10,
+                 transition_frames=5):
         self.ip = ip
         self.port = port
         self.instance = instance  # 实例编号 (0=不显示, 1-20=显示位置)
@@ -204,6 +217,8 @@ class YeelightDaemon:
         self.deepseek_poll_interval = deepseek_poll_interval
         self.deepseek_alternate_interval = deepseek_alternate_interval
         self.rotation_interval = rotation_interval
+        self.transition_frames = max(0, int(transition_frames))
+        self.transition = None
         self.deepseek_tracker = None
         if self.deepseek_enabled:
             state_path = deepseek_state_path or os.path.join(
@@ -441,6 +456,7 @@ class YeelightDaemon:
         self.page_started_at = now
         self.deepseek_subpage = 0
         self.deepseek_subpage_started_at = now
+        self.transition = None
 
     def display_should_paint(self, now=None):
         """是否需要重绘当前屏幕（可能顺带切换页面）"""
@@ -459,17 +475,19 @@ class YeelightDaemon:
 
         # 当前页不再可用 → 回到第一页
         if self.page not in pages:
+            self.transition = None
             self.page = pages[0]
             self.page_started_at = now
             return True
 
-        # 轮播
+        # 过渡进行中：等待下一帧的时刻
+        if self.transition is not None:
+            return now >= self.transition["next_at"]
+
+        # 轮播：到点后开始交叉淡化
         if len(pages) > 1 and now - self.page_started_at >= self.rotation_interval:
             index = pages.index(self.page)
-            self.page = pages[(index + 1) % len(pages)]
-            self.page_started_at = now
-            self.deepseek_subpage = 0
-            self.deepseek_subpage_started_at = now
+            self.start_transition(pages[(index + 1) % len(pages)], now)
             return True
 
         if self.page == "deepseek":
@@ -507,21 +525,89 @@ class YeelightDaemon:
             self.direct_mode_ready = True
         self.send_pixels_with_mark(grid)
 
+    def _render_minimax(self, snapshot, now):
+        """MiniMax 页像素（不含实例标记）→ (grid, reset_pct)"""
+        reset_pct = minimax.reset_progress_pct(snapshot.interval_reset_at,
+                                               now_ms=int(now * 1000))
+        grid = minimax.render_bar(snapshot.interval_pct, snapshot.weekly_pct,
+                                  reset_pct)
+        return grid, reset_pct
+
+    def _page_grid(self, page, now=None):
+        """某一页的像素（不含实例标记）；数据不可用返回 None"""
+        if now is None:
+            now = time.time()
+        if page == "deepseek":
+            values = self.deepseek_values_if_available(now)
+            if values is None:
+                return None
+            mode, texts = deepseek.compose_page(values[0], values[1])
+            index = self.deepseek_subpage if mode == "alternate" else 0
+            return deepseek.render_page(mode, texts, index)
+        snapshot = self.minimax_snapshot_if_available(now)
+        if snapshot is None:
+            return None
+        grid, _ = self._render_minimax(snapshot, now)
+        return grid
+
+    def start_transition(self, to_page, now=None):
+        """开始从当前页到目标页的交叉淡化；帧数为 0 时直接切换"""
+        if now is None:
+            now = time.time()
+        if self.transition_frames <= 0:
+            self.page = to_page
+            self.page_started_at = now
+            self.deepseek_subpage = 0
+            self.deepseek_subpage_started_at = now
+            self.transition = None
+            return
+        self.transition = {
+            "from": self.page,
+            "to": to_page,
+            "step": 0,
+            "frames": self.transition_frames,
+            "next_at": now,
+        }
+
+    def _paint_transition_frame(self, now):
+        """画出过渡的下一帧；最后一帧正好是目标页"""
+        t = self.transition
+        from_grid = self._page_grid(t["from"], now)
+        to_grid = self._page_grid(t["to"], now)
+        if from_grid is None or to_grid is None:
+            # 数据突然不可用：落到目标页，避免卡在半透明状态
+            self.transition = None
+            self.page = t["to"]
+            self.page_started_at = now
+            return
+
+        t["step"] += 1
+        self._takeover_and_send(blend_grids(from_grid, to_grid,
+                                            t["step"] / float(t["frames"])))
+        if t["step"] >= t["frames"]:
+            self.page = t["to"]
+            self.page_started_at = now
+            self.deepseek_subpage = 0
+            self.deepseek_subpage_started_at = now
+            self.transition = None
+        else:
+            t["next_at"] = now + self.command_interval
+
     def paint_minimax(self, snapshot):
         """接管屏幕并画出 MiniMax 配额页"""
         now = time.time()
-        reset_pct = minimax.reset_progress_pct(snapshot.interval_reset_at,
-                                             now_ms=int(now * 1000))
-        grid = minimax.render_bar(snapshot.interval_pct, snapshot.weekly_pct,
-                                reset_pct)
+        grid, reset_pct = self._render_minimax(snapshot, now)
         self._takeover_and_send(grid)
         self.last_minimax_rendered = snapshot
         self.last_minimax_reset_fill = minimax.reset_fill_columns(reset_pct)
         self.display_needs_repaint = False
 
     def paint_current_page(self):
-        """画出当前页"""
+        """画出当前页（过渡中则画下一帧）"""
         now = time.time()
+        if self.transition is not None:
+            self._paint_transition_frame(now)
+            return
         if self.page == "deepseek":
             values = self.deepseek_values_if_available(now)
             if values is None:
@@ -842,6 +928,8 @@ def main():
     parser.add_argument("--no-deepseek", action="store_true", help="关闭 DeepSeek 余额页")
     parser.add_argument("--rotation-interval", type=int, default=None,
                         help="两页轮播间隔（秒，默认 10）")
+    parser.add_argument("--transition-frames", type=int, default=None,
+                        help="切页交叉淡化帧数（默认 5，0 表示直接切换）")
     parser.add_argument("--dry-run", action="store_true",
                         help="打印解析后的配置后退出，不连接设备")
     args = parser.parse_args()

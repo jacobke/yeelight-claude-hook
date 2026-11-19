@@ -71,6 +71,7 @@ alternates with the MiniMax page every 10 seconds:
 - The baseline is stored in `deepseek_state.json` (git-ignored) and survives restarts.
 - When both amounts are large, the page switches to alternating the two values.
 - Balances of 10,000+ are abbreviated as `12K` / `1.2M`.
+- **Transition**: the two pages cross-fade over 5 frames (~5 s) instead of hard-cutting. Tune with `rotation.transition_frames`; set it to 0 for an instant switch.
 
 Configure `deepseek.api_key` in `config.json`. If Claude Code is already pointed at
 DeepSeek in `~/.claude/settings.json`, that key is reused automatically.

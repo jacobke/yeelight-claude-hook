@@ -69,6 +69,9 @@ def make_daemon(**overrides):
     daemon.deepseek_subpage_started_at = 0.0
     daemon.last_deepseek_rendered = None
     daemon.rotation_interval = 10
+    daemon.transition_frames = 5
+    daemon.transition = None
+    daemon.command_interval = 1.0
     daemon.page = "minimax"
     daemon.page_started_at = 0.0
     for key, value in overrides.items():
@@ -297,12 +300,8 @@ class TestPageRotation(unittest.TestCase):
         d.deepseek_values_if_available = lambda now=None: (d.deepseek_spend,
                                                            d.deepseek_balance)
         d.painted_pages = []
-        original = d.paint_current_page
-
-        def record():
-            d.painted_pages.append(d.page)
-            original()
-        d.paint_current_page = record
+        d.sent_grids = []
+        d._takeover_and_send = lambda grid: d.sent_grids.append(grid)
         for key, value in overrides.items():
             setattr(d, key, value)
         return d
@@ -318,7 +317,14 @@ class TestPageRotation(unittest.TestCase):
     def test_rotates_after_interval(self):
         d = self._daemon_with_both_pages(page="minimax", page_started_at=0.0)
         self.assertTrue(d.display_should_paint(now=11.0))
+        self.assertEqual(d.page, "minimax", "应先开始过渡，而不是瞬间切页")
+        self.assertEqual(d.transition["to"], "deepseek")
+
+        for _ in range(d.transition_frames):
+            d.paint_current_page()
         self.assertEqual(d.page, "deepseek")
+        self.assertIsNone(d.transition)
+        self.assertEqual(len(d.sent_grids), d.transition_frames)
 
     def test_does_not_rotate_before_interval(self):
         d = self._daemon_with_both_pages(
@@ -454,6 +460,83 @@ class TestDryRunKeyMasking(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         data = json.loads(result.stdout)
         self.assertFalse(data["minimax_enabled"])
+
+
+class TestBlendGrids(unittest.TestCase):
+    def test_alpha_zero_returns_first(self):
+        a = [(10, 20, 30)] * 100
+        b = [(200, 100, 50)] * 100
+        self.assertEqual(daemon_module.blend_grids(a, b, 0.0), a)
+
+    def test_alpha_one_returns_second(self):
+        a = [(10, 20, 30)] * 100
+        b = [(200, 100, 50)] * 100
+        self.assertEqual(daemon_module.blend_grids(a, b, 1.0), b)
+
+    def test_alpha_half_averages(self):
+        a = [(0, 0, 0)]
+        b = [(200, 100, 50)]
+        self.assertEqual(daemon_module.blend_grids(a, b, 0.5), [(100, 50, 25)])
+
+    def test_alpha_is_clamped(self):
+        a = [(0, 0, 0)]
+        b = [(255, 255, 255)]
+        self.assertEqual(daemon_module.blend_grids(a, b, -1.0), a)
+        self.assertEqual(daemon_module.blend_grids(a, b, 2.0), b)
+
+
+class TestFadeTransition(unittest.TestCase):
+    def _daemon(self):
+        d = make_daemon(deepseek_enabled=True, deepseek_api_key="k",
+                        deepseek_balance=58.0, deepseek_spend=3.2,
+                        page="minimax", page_started_at=0.0,
+                        last_effect_finished_at=-1000.0,
+                        transition_frames=3)
+        d.minimax_snapshot_if_available = lambda now=None: minimax.MinimaxSnapshot(50, 50)
+        d.deepseek_values_if_available = lambda now=None: (d.deepseek_spend,
+                                                           d.deepseek_balance)
+        d.sent_grids = []
+        d._takeover_and_send = lambda grid: d.sent_grids.append(grid)
+        return d
+
+    def test_transition_runs_for_configured_frames(self):
+        d = self._daemon()
+        self.assertTrue(d.display_should_paint(now=11.0))
+        for _ in range(3):
+            d.paint_current_page()
+        self.assertEqual(len(d.sent_grids), 3)
+        self.assertEqual(d.page, "deepseek")
+        self.assertIsNone(d.transition)
+
+    def test_last_frame_is_target_page(self):
+        d = self._daemon()
+        d.display_should_paint(now=11.0)
+        for _ in range(3):
+            d.paint_current_page()
+        target = d._page_grid("deepseek")
+        self.assertEqual(d.sent_grids[-1], target)
+
+    def test_zero_frames_switches_immediately(self):
+        d = self._daemon()
+        d.transition_frames = 0
+        d.display_should_paint(now=11.0)
+        self.assertEqual(d.page, "deepseek")
+        self.assertIsNone(d.transition)
+
+    def test_effect_end_clears_transition(self):
+        d = self._daemon()
+        d.display_should_paint(now=11.0)
+        self.assertIsNotNone(d.transition)
+        d.reset_page_after_effect(now=20.0)
+        self.assertIsNone(d.transition)
+
+    def test_transition_falls_back_when_target_unavailable(self):
+        d = self._daemon()
+        d.display_should_paint(now=11.0)
+        d.deepseek_values_if_available = lambda now=None: None
+        d.paint_current_page()
+        self.assertIsNone(d.transition)
+        self.assertEqual(d.page, "deepseek")
 
 
 if __name__ == "__main__":
