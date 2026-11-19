@@ -45,6 +45,7 @@ def make_daemon(**overrides):
     daemon.takeover_delay = 20
     daemon.last_snapshot = None
     daemon.last_rendered = None
+    daemon.last_reset_fill = None
     daemon.last_quota_fetch_at = 0.0
     daemon.poll_interval = 300
     daemon.api_key = "dummy"
@@ -96,6 +97,32 @@ class TestQuotaTick(unittest.TestCase):
         d.quota_snapshot_if_available = lambda now=None: quota.QuotaSnapshot(49, 50)
         self.assertTrue(d.quota_tick())
         self.assertEqual(len(d.painted), 1)
+
+    def test_reset_countdown_change_triggers_repaint(self):
+        # 配额百分比没变，但倒计时走过一格 → 需要重绘中间那行
+        now_ms = 1_000_000_000_000
+        reset_at = now_ms + quota.INTERVAL_WINDOW_MS // 2
+        snapshot = quota.QuotaSnapshot(50, 50, interval_reset_at=reset_at)
+
+        d = make_daemon(quota_needs_repaint=False,
+                        last_rendered=snapshot,
+                        last_reset_fill=10)
+        d.quota_snapshot_if_available = lambda now=None: snapshot
+        self.assertFalse(d.quota_should_paint(now=now_ms / 1000.0))
+
+        # 走过一格后应触发重绘。每格约 15.8 分钟，但 50% 这个位置
+        # 要到 56% 才跨格，所以取 20 分钟留出余量
+        later = now_ms + 20 * 60 * 1000
+        self.assertTrue(d.quota_should_paint(now=later / 1000.0))
+
+    def test_reset_countdown_absent_does_not_force_repaint(self):
+        # 没有重置时间时，中间那行不画，也不应因此反复重绘
+        snapshot = quota.QuotaSnapshot(50, 50, interval_reset_at=0)
+        d = make_daemon(quota_needs_repaint=False,
+                        last_rendered=snapshot,
+                        last_reset_fill=None)
+        d.quota_snapshot_if_available = lambda now=None: snapshot
+        self.assertFalse(d.quota_should_paint(now=1_000_000_000.0))
 
     def test_disabled_quota_never_paints(self):
         d = make_daemon(quota_enabled=False)

@@ -182,6 +182,7 @@ class YeelightDaemon:
         self.quota_thread = None            # 配额轮询线程
         self.last_snapshot = None           # 最近一次成功拉到的快照（缓存）
         self.last_rendered = None           # 最近一次画到屏幕上的快照
+        self.last_reset_fill = None         # 最近一次画出的重置倒计时列数
         self.quota_needs_repaint = True     # 效果抢过屏幕后置位
         self.last_quota_fetch_at = 0.0      # 最近一次尝试拉取的时间戳
         self.last_effect_finished_at = time.time()  # 启动后立即允许显示配额条
@@ -374,17 +375,27 @@ class YeelightDaemon:
         snapshot = self.quota_snapshot_if_available(now)
         if snapshot is None:
             return False
-        return snapshot.differs_from(self.last_rendered) or self.quota_needs_repaint
+        if snapshot.differs_from(self.last_rendered) or self.quota_needs_repaint:
+            return True
+        # 配额百分比没变，但重置倒计时可能已经走了一格
+        reset_pct = quota.reset_progress_pct(snapshot.interval_reset_at,
+                                             now_ms=int(now * 1000))
+        return quota.reset_fill_columns(reset_pct) != self.last_reset_fill
 
     def paint_quota(self, snapshot):
         """接管屏幕并画出配额条"""
-        grid = quota.render_bar(snapshot.interval_pct, snapshot.weekly_pct)
+        now = time.time()
+        reset_pct = quota.reset_progress_pct(snapshot.interval_reset_at,
+                                             now_ms=int(now * 1000))
+        grid = quota.render_bar(snapshot.interval_pct, snapshot.weekly_pct,
+                                reset_pct)
         # 接管序列：停掉设备端内置效果（complete 的绿色呼吸），回到 direct 模式
         self.send_command("stop_cf", [])
         self.send_command("set_power", ["on"])
         self.send_command("activate_fx_mode", [{"mode": "direct"}])
         self.send_pixels_with_mark(grid)
         self.last_rendered = snapshot
+        self.last_reset_fill = quota.reset_fill_columns(reset_pct)
         self.quota_needs_repaint = False
 
     def quota_tick(self):

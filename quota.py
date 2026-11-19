@@ -13,6 +13,7 @@ Token Plan 返回的是「剩余百分比」形态，*_total_count / *_usage_cou
 """
 
 import json
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -39,6 +40,19 @@ BLACK = (0, 0, 0)
 # 色阶：(阈值, 颜色)，取第一个满足 pct >= 阈值 的颜色
 WARM_RAMP = ((50, GREEN), (20, YELLOW), (0, RED))     # 5 小时窗口
 COOL_RAMP = ((50, TEAL), (20, BLUE), (0, PURPLE))     # 周窗口
+
+# 5 小时滚动窗口的时长（毫秒）
+INTERVAL_WINDOW_MS = 5 * 3600 * 1000
+
+# 中间那行的「重置倒计时」渐变色阶：(位置 0..1, 颜色)
+# 蓝 → 青 → 绿 → 黄 → 橙：越接近重置，右边越长、整行越暖
+RESET_STOPS = (
+    (0.00, (40, 80, 220)),    # 蓝
+    (0.30, (0, 200, 200)),    # 青
+    (0.55, (0, 220, 100)),    # 绿
+    (0.80, (230, 200, 0)),    # 黄
+    (1.00, (255, 80, 0)),     # 橙
+)
 
 
 class QuotaError(Exception):
@@ -137,6 +151,46 @@ def _dim(color, factor=0.3):
     return tuple(int(c * factor) for c in color)
 
 
+def _gradient_color(pos):
+    """按位置 0..1 在 RESET_STOPS 上取渐变色"""
+    pos = max(0.0, min(1.0, pos))
+    for i in range(len(RESET_STOPS) - 1):
+        p0, c0 = RESET_STOPS[i]
+        p1, c1 = RESET_STOPS[i + 1]
+        if pos <= p1:
+            span = p1 - p0
+            t = 0.0 if span == 0 else (pos - p0) / span
+            return tuple(int(c0[k] + (c1[k] - c0[k]) * t) for k in range(3))
+    return RESET_STOPS[-1][1]
+
+
+def reset_progress_pct(reset_at_ms, now_ms=None, window_ms=INTERVAL_WINDOW_MS):
+    """5 小时窗口「已走过」的百分比（0..100）：0 = 刚重置，100 = 即将重置。
+
+    没有重置时间（缺失 / 非法）时返回 None，表示这一行不画。
+    """
+    try:
+        reset_at_ms = int(reset_at_ms)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if reset_at_ms <= 0:
+        return None
+    if now_ms is None:
+        now_ms = int(time.time() * 1000)
+    elapsed = window_ms - (reset_at_ms - now_ms)
+    pct = int(elapsed * 100.0 / window_ms)
+    return max(0, min(100, pct))
+
+
+def reset_fill_columns(reset_pct):
+    """重置倒计时行应亮的列数（1..BAR_WIDTH）；reset_pct 为 None 时返回 None"""
+    if reset_pct is None:
+        return None
+    pct = _clamp_pct(reset_pct)
+    filled = int(BAR_WIDTH * pct / 100 + 0.5)
+    return max(1, filled)
+
+
 def level_color(pct, ramp):
     """按色阶取颜色：ramp 是 ((阈值, 颜色), ...) 的序列"""
     pct = max(0, min(100, int(pct)))
@@ -146,15 +200,17 @@ def level_color(pct, ramp):
     return ramp[-1][1]
 
 
-def render_bar(interval_pct, weekly_pct):
+def render_bar(interval_pct, weekly_pct, reset_pct=None):
     """渲染配额条 → 100 个 (r, g, b) 像素
 
     布局（物理行，row4 = 顶）：
         row4 ┐
         row3 ┘ 5 小时条（2px 厚，19 列）
-        row2   分隔行（全黑；col19 整列留给实例标记）
+        row2   重置倒计时（1px，渐变：蓝→青→绿→黄→橙；col19 留给实例标记）
         row1 ┐
         row0 ┘ 周条（2px 厚，19 列）
+
+    reset_pct 为 None 时 row2 保持全黑。
     """
     grid = [BLACK] * (ROWS * COLS)
 
@@ -177,6 +233,13 @@ def render_bar(interval_pct, weekly_pct):
 
     draw(ROW_TOP, interval_pct, WARM_RAMP)
     draw(ROW_BOTTOM, weekly_pct, COOL_RAMP)
+
+    filled = reset_fill_columns(reset_pct)
+    if filled is not None:
+        for col in range(filled):
+            pos = col / float(BAR_WIDTH - 1)
+            grid[2 * COLS + col] = _gradient_color(pos)
+
     return grid
 
 

@@ -584,5 +584,79 @@ class TestFetchQuota(unittest.TestCase):
                     quota.fetch_quota("dummy-key", api_base=bad_base)
 
 
+class TestResetProgress(unittest.TestCase):
+    def test_zero_right_after_reset(self):
+        now = 1_000_000_000_000
+        window = 5 * 3600 * 1000
+        self.assertEqual(quota.reset_progress_pct(now + window, now_ms=now), 0)
+
+    def test_halfway(self):
+        now = 1_000_000_000_000
+        window = 5 * 3600 * 1000
+        self.assertEqual(quota.reset_progress_pct(now + window // 2, now_ms=now), 50)
+
+    def test_almost_reset(self):
+        now = 1_000_000_000_000
+        self.assertEqual(quota.reset_progress_pct(now + 60_000, now_ms=now), 99)
+
+    def test_past_reset_clamps_to_100(self):
+        now = 1_000_000_000_000
+        self.assertEqual(quota.reset_progress_pct(now - 60_000, now_ms=now), 100)
+
+    def test_missing_reset_time_returns_none(self):
+        self.assertIsNone(quota.reset_progress_pct(0, now_ms=1_000_000_000_000))
+        self.assertIsNone(quota.reset_progress_pct(None, now_ms=1_000_000_000_000))
+
+    def test_out_of_range_clamped(self):
+        now = 1_000_000_000_000
+        window = 5 * 3600 * 1000
+        # 距离重置超过一个窗口（异常数据）也不能超过 0..100
+        self.assertEqual(quota.reset_progress_pct(now + window * 3, now_ms=now), 0)
+
+
+class TestResetBar(unittest.TestCase):
+    def test_row2_is_black_without_reset_progress(self):
+        grid = quota.render_bar(50, 50)
+        for col in range(quota.COLS):
+            self.assertEqual(grid[2 * quota.COLS + col], quota.BLACK)
+
+    def test_row2_lights_with_reset_progress(self):
+        grid = quota.render_bar(50, 50, reset_pct=50)
+        lit = sum(1 for col in range(quota.BAR_WIDTH)
+                  if grid[2 * quota.COLS + col] != quota.BLACK)
+        self.assertEqual(lit, 10)
+
+    def test_reset_row_last_column_black(self):
+        grid = quota.render_bar(50, 50, reset_pct=100)
+        self.assertEqual(grid[2 * quota.COLS + quota.COLS - 1], quota.BLACK)
+
+    def test_reset_row_does_not_touch_quota_rows(self):
+        without = quota.render_bar(30, 20)
+        with_reset = quota.render_bar(30, 20, reset_pct=80)
+        for row in quota.ROW_TOP + quota.ROW_BOTTOM:
+            for col in range(quota.COLS):
+                self.assertEqual(without[row * quota.COLS + col],
+                                 with_reset[row * quota.COLS + col])
+
+    def test_reset_row_uses_multiple_colors(self):
+        grid = quota.render_bar(50, 50, reset_pct=100)
+        colors = {grid[2 * quota.COLS + col] for col in range(quota.BAR_WIDTH)}
+        self.assertGreater(len(colors), 4, "整行应该铺开多种颜色，而不是单一颜色")
+
+    def test_reset_row_starts_cool_and_ends_warm(self):
+        grid = quota.render_bar(50, 50, reset_pct=100)
+        first = grid[2 * quota.COLS]
+        last = grid[2 * quota.COLS + quota.BAR_WIDTH - 1]
+        # 起点偏蓝（B 最大），终点偏暖（R 最大）
+        self.assertGreater(first[2], first[0])
+        self.assertGreater(last[0], last[2])
+
+    def test_reset_row_keeps_one_dot_at_zero_progress(self):
+        grid = quota.render_bar(50, 50, reset_pct=0)
+        lit = sum(1 for col in range(quota.BAR_WIDTH)
+                  if grid[2 * quota.COLS + col] != quota.BLACK)
+        self.assertEqual(lit, 1)
+
+
 if __name__ == "__main__":
     unittest.main()
