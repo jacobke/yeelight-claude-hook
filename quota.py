@@ -132,6 +132,11 @@ def parse_remains(body):
     )
 
 
+def _dim(color, factor=0.3):
+    """把颜色按比例压暗，用于「耗尽」时保留的暗点"""
+    return tuple(int(c * factor) for c in color)
+
+
 def level_color(pct, ramp):
     """按色阶取颜色：ramp 是 ((阈值, 颜色), ...) 的序列"""
     pct = max(0, min(100, int(pct)))
@@ -161,6 +166,10 @@ def render_bar(interval_pct, weekly_pct):
         # 恰好在最需要信息的时刻丢掉信息
         if pct > 0 and filled < 1:
             filled = 1
+        elif pct == 0:
+            # 耗尽：保留一个压暗的告警色点 —— 全黑会让人以为功能坏了
+            filled = 1
+            color = _dim(color)
         for row in rows:
             for col in range(BAR_WIDTH):
                 if col < filled:

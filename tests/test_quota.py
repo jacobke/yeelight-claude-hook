@@ -394,11 +394,34 @@ class TestRenderBar(unittest.TestCase):
             for col in range(quota.BAR_WIDTH):
                 self.assertNotEqual(grid[row * quota.COLS + col], quota.BLACK)
 
-    def test_empty_bars_are_black(self):
+    def test_exhausted_bars_keep_a_dim_dot(self):
+        # 0% 不能全黑 —— 否则和「功能未启用 / 灯坏了」分不出来
         grid = quota.render_bar(0, 0)
         for row in quota.ROW_TOP + quota.ROW_BOTTOM:
-            for col in range(quota.BAR_WIDTH):
+            self.assertNotEqual(grid[row * quota.COLS], quota.BLACK,
+                                "row %d 的左端应有一个暗点" % row)
+            # 只有第一列亮，其余全黑
+            for col in range(1, quota.BAR_WIDTH):
                 self.assertEqual(grid[row * quota.COLS + col], quota.BLACK)
+
+    def test_exhausted_dot_is_dimmed_but_colored(self):
+        grid = quota.render_bar(0, 0)
+        warm_dot = grid[quota.ROW_TOP[0] * quota.COLS]
+        cool_dot = grid[quota.ROW_BOTTOM[0] * quota.COLS]
+        # 仍然保有告警色相：红的 R 通道最大，紫的 B 通道最大
+        self.assertGreater(warm_dot[0], warm_dot[1])
+        self.assertGreater(warm_dot[0], warm_dot[2])
+        self.assertGreater(cool_dot[2], cool_dot[1])
+        # 但明显比正常告警色暗
+        self.assertLess(sum(warm_dot), sum(quota.RED))
+        self.assertLess(sum(cool_dot), sum(quota.PURPLE))
+
+    def test_exhausted_dot_distinct_from_nonzero(self):
+        # 1% 和 0% 必须能区分：颜色不同（1% 是亮色，0% 是暗色）
+        one_pct = quota.render_bar(1, 1)[quota.ROW_TOP[0] * quota.COLS]
+        zero_pct = quota.render_bar(0, 0)[quota.ROW_TOP[0] * quota.COLS]
+        self.assertNotEqual(one_pct, zero_pct)
+        self.assertLess(sum(zero_pct), sum(one_pct))
 
     def test_half_fill_is_ten_columns(self):
         grid = quota.render_bar(50, 50)
@@ -409,7 +432,7 @@ class TestRenderBar(unittest.TestCase):
 
     def test_low_percent_rounding(self):
         # 只要剩余 > 0 就至少亮一格 —— 额度过低时必须能和「已耗尽」/「功能未启用」区分开
-        for pct, expected in ((1, 1), (2, 1), (3, 1), (0, 0)):
+        for pct, expected in ((1, 1), (2, 1), (3, 1), (0, 1)):
             grid = quota.render_bar(pct, pct)
             for row in quota.ROW_TOP + quota.ROW_BOTTOM:
                 lit = sum(1 for col in range(quota.BAR_WIDTH)
