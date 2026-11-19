@@ -64,6 +64,8 @@ class QuotaSnapshot:
 
 def _clamp_pct(value):
     """把接口返回的百分比规整成 0..100 的整数；非数字按 0 处理"""
+    if isinstance(value, bool):
+        return 0
     try:
         pct = int(float(value))
     except (TypeError, ValueError, OverflowError):
@@ -73,6 +75,8 @@ def _clamp_pct(value):
 
 def _to_int(value):
     """把接口返回的整数规整为 int；非数字/不可转的返回 0"""
+    if isinstance(value, bool):
+        return 0
     try:
         return int(float(value))
     except (TypeError, ValueError, OverflowError):
@@ -88,9 +92,14 @@ def parse_remains(body):
     if not isinstance(base_resp, dict):
         raise QuotaError("响应缺少 base_resp")
     status = base_resp.get("status_code")
-    if isinstance(status, bool) or not isinstance(status, int):
+    if isinstance(status, bool):
+        # bool 不是合法的状态码：True/False 一律当错误，避免 False 被当成 0 成功
+        status = -1
+    elif not isinstance(status, int):
         try:
-            status = int(status)
+            f = float(status)
+            # 只有整数值的浮点才算合法状态码，0.4 这类截断成 0 等于放行畸形响应
+            status = int(f) if f.is_integer() else -1
         except (TypeError, ValueError, OverflowError):
             status = -1
     if status != 0:

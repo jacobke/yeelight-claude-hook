@@ -235,6 +235,66 @@ class TestParseRemainsMalformed(unittest.TestCase):
         with self.assertRaises(quota.QuotaError):
             quota.parse_remains(body)
 
+    def _body_with_status(self, status):
+        return {
+            "model_remains": [{"model_name": "general",
+                               "current_interval_remaining_percent": 64,
+                               "current_weekly_remaining_percent": 23}],
+            "base_resp": {"status_code": status},
+        }
+
+    def test_bool_false_status_code_raises(self):
+        """False 是 JSON 布尔不是状态码，绝不能被当成 0（成功）"""
+        with self.assertRaises(quota.QuotaError):
+            quota.parse_remains(self._body_with_status(False))
+
+    def test_bool_true_status_code_raises(self):
+        with self.assertRaises(quota.QuotaError):
+            quota.parse_remains(self._body_with_status(True))
+
+    def test_fractional_float_status_code_raises(self):
+        """0.4 截断成 0 等于放行畸形响应，必须当错误"""
+        with self.assertRaises(quota.QuotaError):
+            quota.parse_remains(self._body_with_status(0.5))
+
+    def test_float_one_status_code_raises(self):
+        with self.assertRaises(quota.QuotaError):
+            quota.parse_remains(self._body_with_status(1.0))
+
+    def test_negative_fractional_float_status_code_raises(self):
+        with self.assertRaises(quota.QuotaError):
+            quota.parse_remains(self._body_with_status(-0.5))
+
+    def test_string_zero_status_code_still_accepted(self):
+        """字符串 "0" 是合法成功码，别被改坏"""
+        snapshot = quota.parse_remains(self._body_with_status("0"))
+        self.assertEqual(snapshot.interval_pct, 64)
+        self.assertEqual(snapshot.weekly_pct, 23)
+
+    def test_bool_percent_becomes_zero(self):
+        body = {
+            "model_remains": [{"model_name": "general",
+                               "current_interval_remaining_percent": True,
+                               "current_weekly_remaining_percent": False}],
+            "base_resp": {"status_code": 0},
+        }
+        snapshot = quota.parse_remains(body)
+        self.assertEqual(snapshot.interval_pct, 0)
+        self.assertEqual(snapshot.weekly_pct, 0)
+
+    def test_bool_end_time_becomes_zero(self):
+        body = {
+            "model_remains": [{"model_name": "general",
+                               "current_interval_remaining_percent": 50,
+                               "current_weekly_remaining_percent": 50,
+                               "end_time": True,
+                               "weekly_end_time": False}],
+            "base_resp": {"status_code": 0},
+        }
+        snapshot = quota.parse_remains(body)
+        self.assertEqual(snapshot.interval_reset_at, 0)
+        self.assertEqual(snapshot.weekly_reset_at, 0)
+
 
 class TestParseRemainsContract(unittest.TestCase):
     """契约：parse_remains 只允许抛 QuotaError，任何其它异常都不许逃出来"""
