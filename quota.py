@@ -130,3 +130,38 @@ def parse_remains(body):
         interval_reset_at=_to_int(entry.get("end_time")),
         weekly_reset_at=_to_int(entry.get("weekly_end_time")),
     )
+
+
+def level_color(pct, ramp):
+    """按色阶取颜色：ramp 是 ((阈值, 颜色), ...) 的序列"""
+    pct = max(0, min(100, int(pct)))
+    for threshold, color in ramp:
+        if pct >= threshold:
+            return color
+    return ramp[-1][1]
+
+
+def render_bar(interval_pct, weekly_pct):
+    """渲染配额条 → 100 个 (r, g, b) 像素
+
+    布局（物理行，row4 = 顶）：
+        row4 ┐
+        row3 ┘ 5 小时条（2px 厚，19 列）
+        row2   分隔行（空，col19 留给实例标记）
+        row1 ┐
+        row0 ┘ 周条（2px 厚，19 列）
+    """
+    grid = [BLACK] * (ROWS * COLS)
+
+    def draw(rows, pct, ramp):
+        color = level_color(pct, ramp)
+        pct = max(0, min(100, int(pct)))
+        filled = int(BAR_WIDTH * pct / 100 + 0.5)
+        for row in rows:
+            for col in range(BAR_WIDTH):
+                if col < filled:
+                    grid[row * COLS + col] = color
+
+    draw(ROW_TOP, interval_pct, WARM_RAMP)
+    draw(ROW_BOTTOM, weekly_pct, COOL_RAMP)
+    return grid

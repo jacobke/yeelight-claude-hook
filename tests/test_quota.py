@@ -362,5 +362,82 @@ class TestParseRemainsContract(unittest.TestCase):
         self.assertLessEqual(snapshot.weekly_pct, 100)
 
 
+class TestLevelColor(unittest.TestCase):
+    def test_warm_ramp_boundaries(self):
+        self.assertEqual(quota.level_color(100, quota.WARM_RAMP), quota.GREEN)
+        self.assertEqual(quota.level_color(50, quota.WARM_RAMP), quota.GREEN)
+        self.assertEqual(quota.level_color(49, quota.WARM_RAMP), quota.YELLOW)
+        self.assertEqual(quota.level_color(20, quota.WARM_RAMP), quota.YELLOW)
+        self.assertEqual(quota.level_color(19, quota.WARM_RAMP), quota.RED)
+        self.assertEqual(quota.level_color(0, quota.WARM_RAMP), quota.RED)
+
+    def test_cool_ramp_boundaries(self):
+        self.assertEqual(quota.level_color(100, quota.COOL_RAMP), quota.TEAL)
+        self.assertEqual(quota.level_color(50, quota.COOL_RAMP), quota.TEAL)
+        self.assertEqual(quota.level_color(49, quota.COOL_RAMP), quota.BLUE)
+        self.assertEqual(quota.level_color(20, quota.COOL_RAMP), quota.BLUE)
+        self.assertEqual(quota.level_color(19, quota.COOL_RAMP), quota.PURPLE)
+        self.assertEqual(quota.level_color(0, quota.COOL_RAMP), quota.PURPLE)
+
+    def test_clamps_out_of_range(self):
+        self.assertEqual(quota.level_color(150, quota.WARM_RAMP), quota.GREEN)
+        self.assertEqual(quota.level_color(-10, quota.WARM_RAMP), quota.RED)
+
+
+class TestRenderBar(unittest.TestCase):
+    def test_returns_100_pixels(self):
+        self.assertEqual(len(quota.render_bar(50, 50)), 100)
+
+    def test_full_bars_fill_19_columns(self):
+        grid = quota.render_bar(100, 100)
+        for row in quota.ROW_TOP + quota.ROW_BOTTOM:
+            for col in range(quota.BAR_WIDTH):
+                self.assertNotEqual(grid[row * quota.COLS + col], quota.BLACK)
+
+    def test_empty_bars_are_black(self):
+        grid = quota.render_bar(0, 0)
+        for row in quota.ROW_TOP + quota.ROW_BOTTOM:
+            for col in range(quota.BAR_WIDTH):
+                self.assertEqual(grid[row * quota.COLS + col], quota.BLACK)
+
+    def test_half_fill_is_ten_columns(self):
+        grid = quota.render_bar(50, 50)
+        lit = sum(1 for col in range(quota.BAR_WIDTH)
+                  if grid[quota.ROW_TOP[0] * quota.COLS + col] != quota.BLACK)
+        self.assertEqual(lit, 10)
+
+    def test_last_column_always_black(self):
+        grid = quota.render_bar(100, 100)
+        for row in range(quota.ROWS):
+            self.assertEqual(grid[row * quota.COLS + quota.COLS - 1], quota.BLACK)
+
+    def test_separator_row_is_black(self):
+        grid = quota.render_bar(100, 100)
+        for col in range(quota.COLS):
+            self.assertEqual(grid[2 * quota.COLS + col], quota.BLACK)
+
+    def test_rows_do_not_overlap(self):
+        self.assertEqual(set(quota.ROW_TOP) & set(quota.ROW_BOTTOM), set())
+        self.assertNotIn(2, quota.ROW_TOP)
+        self.assertNotIn(2, quota.ROW_BOTTOM)
+
+    def test_high_percent_uses_warm_and_cool_colors(self):
+        grid = quota.render_bar(74, 24)
+        self.assertEqual(grid[quota.ROW_TOP[0] * quota.COLS], quota.GREEN)
+        self.assertEqual(grid[quota.ROW_BOTTOM[0] * quota.COLS], quota.BLUE)
+
+    def test_low_percent_uses_red_and_purple(self):
+        grid = quota.render_bar(12, 8)
+        self.assertEqual(grid[quota.ROW_TOP[0] * quota.COLS], quota.RED)
+        self.assertEqual(grid[quota.ROW_BOTTOM[0] * quota.COLS], quota.PURPLE)
+
+    def test_unfilled_part_is_black(self):
+        grid = quota.render_bar(74, 24)
+        # 5h 74% → int(19*0.74+0.5) = 14 列填充，第 15 列起为黑
+        row = quota.ROW_TOP[0]
+        self.assertNotEqual(grid[row * quota.COLS + 13], quota.BLACK)
+        self.assertEqual(grid[row * quota.COLS + 14], quota.BLACK)
+
+
 if __name__ == "__main__":
     unittest.main()
