@@ -157,6 +157,10 @@ def render_bar(interval_pct, weekly_pct):
         pct = _clamp_pct(pct)
         color = level_color(pct, ramp)
         filled = int(BAR_WIDTH * pct / 100 + 0.5)
+        # 只要还剩一点就至少亮一格：否则 1%/2% 会和「已耗尽」一样全黑，
+        # 恰好在最需要信息的时刻丢掉信息
+        if pct > 0 and filled < 1:
+            filled = 1
         for row in rows:
             for col in range(BAR_WIDTH):
                 if col < filled:

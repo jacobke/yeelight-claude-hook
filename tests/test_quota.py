@@ -408,14 +408,29 @@ class TestRenderBar(unittest.TestCase):
             self.assertEqual(lit, 10, "row %d 的填充列数不对" % row)
 
     def test_low_percent_rounding(self):
-        # int(19*pct/100+0.5) 的四舍五入边界：1%/2% 不够一列，3% 起亮一列
-        for pct, expected in ((1, 0), (2, 0), (3, 1)):
+        # 只要剩余 > 0 就至少亮一格 —— 额度过低时必须能和「已耗尽」/「功能未启用」区分开
+        for pct, expected in ((1, 1), (2, 1), (3, 1), (0, 0)):
             grid = quota.render_bar(pct, pct)
             for row in quota.ROW_TOP + quota.ROW_BOTTOM:
                 lit = sum(1 for col in range(quota.BAR_WIDTH)
                           if grid[row * quota.COLS + col] != quota.BLACK)
                 self.assertEqual(lit, expected,
                                  "%d%% 在 row %d 的填充列数应为 %d" % (pct, row, expected))
+
+    def test_low_percent_keeps_critical_color(self):
+        # 1% 的那一格必须是告警色，不能是"正常"色
+        grid = quota.render_bar(1, 1)
+        self.assertEqual(grid[quota.ROW_TOP[0] * quota.COLS], quota.RED)
+        self.assertEqual(grid[quota.ROW_BOTTOM[0] * quota.COLS], quota.PURPLE)
+
+    def test_minimum_one_column_never_exceeds_bar_width(self):
+        for pct in range(0, 101):
+            grid = quota.render_bar(pct, pct)
+            for row in quota.ROW_TOP + quota.ROW_BOTTOM:
+                lit = sum(1 for col in range(quota.BAR_WIDTH)
+                          if grid[row * quota.COLS + col] != quota.BLACK)
+                self.assertGreaterEqual(lit, 1 if pct > 0 else 0)
+                self.assertLessEqual(lit, quota.BAR_WIDTH)
 
     def test_last_column_always_black(self):
         grid = quota.render_bar(100, 100)
