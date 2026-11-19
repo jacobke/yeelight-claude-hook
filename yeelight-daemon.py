@@ -33,6 +33,12 @@ DEFAULT_PORT = 55443
 SOCKET_PATH = "/tmp/yeelight.sock"
 ROWS, COLS = 5, 20
 
+# 所有可用的效果状态
+VALID_STATES = [
+    "start", "thinking", "done", "wait", "interrupt",
+    "complete", "end", "off", "quota",
+]
+
 # ============================================================================
 # 3x5 字体
 # ============================================================================
@@ -542,6 +548,14 @@ class YeelightDaemon:
         # count=0 无限循环, action=1 保持最后状态（亮）
         self.send_command("start_cf", [0, 1, flow_string])
 
+    def effect_quota(self):
+        """立即绘制一次配额条（调试 / 手动刷新用）"""
+        snapshot = self.quota_snapshot_if_available()
+        if snapshot is None:
+            print("No quota data available", file=sys.stderr, flush=True)
+            return
+        self.paint_quota(snapshot)
+
     def effect_end(self, duration=2.0):
         """红色渐出"""
         steps = 15
@@ -569,7 +583,7 @@ class YeelightDaemon:
         try:
             # 对于点阵效果，确保先进入 direct mode
             # complete 使用内置效果，不需要 direct mode
-            if state not in ["complete", "off"]:
+            if state not in ["complete", "off", "quota"]:
                 self.send_command("stop_cf", [])  # 停止内置效果
                 time.sleep(0.1)
                 self.send_command("set_power", ["on"])
@@ -586,6 +600,7 @@ class YeelightDaemon:
                 "complete": lambda: self.effect_complete(),
                 "end": lambda: self.effect_end(duration),
                 "off": lambda: self.effect_off(),
+                "quota": lambda: self.effect_quota(),
             }
 
             handler = handlers.get(state)
@@ -600,7 +615,7 @@ class YeelightDaemon:
         state = cmd.get("state")
         duration = cmd.get("duration", 5.0)
 
-        if state not in ["start", "thinking", "done", "wait", "interrupt", "complete", "end", "off"]:
+        if state not in VALID_STATES:
             return {"status": "error", "message": f"Unknown state: {state}"}
 
         # 中断当前效果

@@ -189,5 +189,20 @@ class TestInstanceMarkerDoesNotOverlapBar(unittest.TestCase):
         self.assertEqual(grid[4 * 20 + 18], quota.GREEN)
 
 
+class TestQuotaStateIsAccepted(unittest.TestCase):
+    def test_quota_state_is_valid(self):
+        self.assertIn("quota", daemon_module.VALID_STATES)
+
+    def test_all_previous_states_still_valid(self):
+        for state in ["start", "thinking", "done", "wait", "interrupt",
+                      "complete", "end", "off"]:
+            self.assertIn(state, daemon_module.VALID_STATES)
+
+    def test_unknown_state_is_rejected(self):
+        daemon = daemon_module.YeelightDaemon.__new__(daemon_module.YeelightDaemon)
+        result = daemon.handle_command({"state": "nope", "duration": 0})
+        self.assertEqual(result["status"], "error")
+
+
 if __name__ == "__main__":
     unittest.main()
