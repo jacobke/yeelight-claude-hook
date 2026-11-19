@@ -23,6 +23,7 @@ import threading
 
 import config as app_config
 import quota
+import deepseek
 
 # ============================================================================
 # 配置
@@ -156,7 +157,14 @@ class YeelightDaemon:
     def __init__(self, ip, port=55443, instance=0, shared=1,
                  quota_enabled=False, api_base=quota.DEFAULT_API_BASE,
                  api_key="", poll_interval=quota.POLL_INTERVAL_DEFAULT,
-                 takeover_delay=quota.TAKEOVER_DELAY_DEFAULT):
+                 takeover_delay=quota.TAKEOVER_DELAY_DEFAULT,
+                 deepseek_enabled=False,
+                 deepseek_api_base=deepseek.DEFAULT_API_BASE,
+                 deepseek_api_key="",
+                 deepseek_poll_interval=deepseek.POLL_INTERVAL_DEFAULT,
+                 deepseek_alternate_interval=deepseek.ALTERNATE_INTERVAL_DEFAULT,
+                 deepseek_state_path="",
+                 rotation_interval=10):
         self.ip = ip
         self.port = port
         self.instance = instance  # 实例编号 (0=不显示, 1-20=显示位置)
@@ -186,6 +194,28 @@ class YeelightDaemon:
         self.quota_needs_repaint = True     # 效果抢过屏幕后置位
         self.last_quota_fetch_at = 0.0      # 最近一次尝试拉取的时间戳
         self.last_effect_finished_at = time.time()  # 启动后立即允许显示配额条
+
+        # ===== DeepSeek 余额页 =====
+        self.deepseek_enabled = deepseek_enabled and bool(deepseek_api_key)
+        self.deepseek_api_base = deepseek_api_base
+        self.deepseek_api_key = deepseek_api_key
+        self.deepseek_poll_interval = deepseek_poll_interval
+        self.deepseek_alternate_interval = deepseek_alternate_interval
+        self.rotation_interval = rotation_interval
+        self.deepseek_tracker = None
+        if self.deepseek_enabled:
+            state_path = deepseek_state_path or os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "quota_state.json")
+            self.deepseek_tracker = deepseek.SpendTracker(state_path)
+        self.direct_mode_ready = False
+        self.deepseek_balance = None
+        self.deepseek_spend = 0.0
+        self.deepseek_last_fetch_at = 0.0
+        self.page = "minimax"
+        self.page_started_at = time.time()
+        self.deepseek_subpage = 0
+        self.deepseek_subpage_started_at = time.time()
+        self.last_deepseek_rendered = None
 
     def mark_instance(self, grid, color=(255, 200, 50)):
         """在 grid 上标记实例编号（土豪金像素）
@@ -260,6 +290,7 @@ class YeelightDaemon:
     def reconnect(self):
         """重连"""
         self.close()
+        self.direct_mode_ready = False
         time.sleep(1)
         return self.connect()
 
@@ -270,6 +301,7 @@ class YeelightDaemon:
             except:
                 pass
             self.sock = None
+        self.direct_mode_ready = False
 
     def send_command(self, method, params, retry=True):
         """发送命令（带频率限制和自动重连）"""
@@ -362,68 +394,169 @@ class YeelightDaemon:
         self.last_quota_fetch_at = now
         return snapshot
 
-    def quota_should_paint(self, now=None):
-        """判断当前是否应该画一次配额条（不产生绘制副作用）"""
-        if not self.quota_enabled:
+    def deepseek_values_if_available(self, now=None):
+        """取 (今日消费, 余额)；不可用时返回 None"""
+        if not self.deepseek_enabled:
+            return None
+        if now is None:
+            now = time.time()
+        if now - self.deepseek_last_fetch_at < self.deepseek_poll_interval:
+            if self.deepseek_balance is None:
+                return None
+            return (self.deepseek_spend, self.deepseek_balance)
+
+        try:
+            balance = deepseek.fetch_balance(self.deepseek_api_key,
+                                             self.deepseek_api_base)
+        except deepseek.DeepSeekError as e:
+            print("DeepSeek fetch failed: %s" % e, file=sys.stderr, flush=True)
+            self.deepseek_last_fetch_at = now
+            if self.deepseek_balance is None:
+                return None
+            return (self.deepseek_spend, self.deepseek_balance)
+
+        today = time.strftime("%Y-%m-%d", time.localtime())
+        self.deepseek_spend = self.deepseek_tracker.update(balance, today)
+        self.deepseek_balance = balance
+        self.deepseek_last_fetch_at = now
+        return (self.deepseek_spend, self.deepseek_balance)
+
+    def available_pages(self, now=None):
+        """当前可显示的页面列表（顺序即轮播顺序）"""
+        pages = []
+        if self.quota_enabled and self.quota_snapshot_if_available(now) is not None:
+            pages.append("minimax")
+        if (self.deepseek_enabled
+                and self.deepseek_values_if_available(now) is not None):
+            pages.append("deepseek")
+        return pages
+
+    def reset_page_after_effect(self, now=None):
+        """效果结束后回到第一页，并重置子页"""
+        if now is None:
+            now = time.time()
+        self.page = "minimax"
+        self.page_started_at = now
+        self.deepseek_subpage = 0
+        self.deepseek_subpage_started_at = now
+
+    def display_should_paint(self, now=None):
+        """是否需要重绘当前屏幕（可能顺带切换页面）"""
+        if now is None:
+            now = time.time()
+        if not self.quota_enabled and not self.deepseek_enabled:
             return False
         if self.effect_thread and self.effect_thread.is_alive():
             return False
-        if now is None:
-            now = time.time()
         if now - self.last_effect_finished_at < self.takeover_delay:
             return False
+
+        pages = self.available_pages(now)
+        if not pages:
+            return False
+
+        # 当前页不再可用 → 回到第一页
+        if self.page not in pages:
+            self.page = pages[0]
+            self.page_started_at = now
+            return True
+
+        # 轮播
+        if len(pages) > 1 and now - self.page_started_at >= self.rotation_interval:
+            index = pages.index(self.page)
+            self.page = pages[(index + 1) % len(pages)]
+            self.page_started_at = now
+            self.deepseek_subpage = 0
+            self.deepseek_subpage_started_at = now
+            return True
+
+        if self.page == "deepseek":
+            values = self.deepseek_values_if_available(now)
+            if values is None:
+                return False
+            mode, texts = deepseek.compose_page(values[0], values[1])
+            if mode == "alternate":
+                if (now - self.deepseek_subpage_started_at
+                        >= self.deepseek_alternate_interval):
+                    self.deepseek_subpage ^= 1
+                    self.deepseek_subpage_started_at = now
+                    return True
+                key = (mode, tuple(texts), self.deepseek_subpage)
+            else:
+                key = (mode, tuple(texts), 0)
+            return key != self.last_deepseek_rendered or self.quota_needs_repaint
+
+        # MiniMax 页
         snapshot = self.quota_snapshot_if_available(now)
         if snapshot is None:
             return False
         if snapshot.differs_from(self.last_rendered) or self.quota_needs_repaint:
             return True
-        # 配额百分比没变，但重置倒计时可能已经走了一格
         reset_pct = quota.reset_progress_pct(snapshot.interval_reset_at,
                                              now_ms=int(now * 1000))
         return quota.reset_fill_columns(reset_pct) != self.last_reset_fill
 
+    def _takeover_and_send(self, grid):
+        """必要时接管设备（停内置效果、进 direct 模式），然后发像素"""
+        if not self.direct_mode_ready:
+            self.send_command("stop_cf", [])
+            self.send_command("set_power", ["on"])
+            self.send_command("activate_fx_mode", [{"mode": "direct"}])
+            self.direct_mode_ready = True
+        self.send_pixels_with_mark(grid)
+
     def paint_quota(self, snapshot):
-        """接管屏幕并画出配额条"""
+        """接管屏幕并画出 MiniMax 配额页"""
         now = time.time()
         reset_pct = quota.reset_progress_pct(snapshot.interval_reset_at,
                                              now_ms=int(now * 1000))
         grid = quota.render_bar(snapshot.interval_pct, snapshot.weekly_pct,
                                 reset_pct)
-        # 接管序列：停掉设备端内置效果（complete 的绿色呼吸），回到 direct 模式
-        self.send_command("stop_cf", [])
-        self.send_command("set_power", ["on"])
-        self.send_command("activate_fx_mode", [{"mode": "direct"}])
-        self.send_pixels_with_mark(grid)
+        self._takeover_and_send(grid)
         self.last_rendered = snapshot
         self.last_reset_fill = quota.reset_fill_columns(reset_pct)
         self.quota_needs_repaint = False
 
-    def quota_tick(self):
-        """配额线程的一轮：判断并（必要时）绘制一次配额条。返回是否绘制了"""
-        if not self.quota_should_paint():
+    def paint_current_page(self):
+        """画出当前页"""
+        now = time.time()
+        if self.page == "deepseek":
+            values = self.deepseek_values_if_available(now)
+            if values is None:
+                return
+            mode, texts = deepseek.compose_page(values[0], values[1])
+            index = self.deepseek_subpage if mode == "alternate" else 0
+            grid = deepseek.render_page(mode, texts, index)
+            self._takeover_and_send(grid)
+            self.last_deepseek_rendered = (mode, tuple(texts), index)
+            self.quota_needs_repaint = False
+            return
+        snapshot = self.quota_snapshot_if_available(now)
+        if snapshot is not None:
+            self.paint_quota(snapshot)
+
+    def display_tick(self):
+        """显示线程的一轮：判断并（必要时）绘制一次。返回是否绘制了"""
+        if not self.display_should_paint():
             return False
-        snapshot = self.quota_snapshot_if_available()
-        if snapshot is None:
-            return False
-        self.paint_quota(snapshot)
+        self.paint_current_page()
         return True
 
-    def quota_loop(self):
-        """配额线程主循环"""
+    def display_loop(self):
+        """显示线程主循环"""
         while self.running:
             time.sleep(1)
             try:
-                self.quota_tick()
+                self.display_tick()
             except Exception as e:
-                print("Quota loop error: %s" % e, file=sys.stderr, flush=True)
+                print("Display loop error: %s" % e, file=sys.stderr, flush=True)
 
-    def start_quota_thread(self):
-        """启动配额线程（未配置 API key 时不启动）"""
-        if not self.quota_enabled:
-            print("Quota meter disabled (no API key or --no-quota)",
-                  file=sys.stderr, flush=True)
+    def start_display_thread(self):
+        """启动显示线程（两个数据源都不可用时不启动）"""
+        if not self.quota_enabled and not self.deepseek_enabled:
+            print("Display disabled (no API key)", file=sys.stderr, flush=True)
             return
-        self.quota_thread = threading.Thread(target=self.quota_loop, daemon=True)
+        self.quota_thread = threading.Thread(target=self.display_loop, daemon=True)
         self.quota_thread.start()
 
     # ========================================================================
@@ -590,6 +723,8 @@ class YeelightDaemon:
         self.interrupted = False  # 重置中断标志
         # 效果抢过了屏幕，回来后需要重画一次配额条
         self.quota_needs_repaint = True
+        # 效果会重配设备模式（尤其 complete 的 start_cf），需要重新接管
+        self.direct_mode_ready = False
 
         try:
             # 对于点阵效果，确保先进入 direct mode
@@ -618,8 +753,9 @@ class YeelightDaemon:
             if handler:
                 handler()
         finally:
-            # 记录效果结束时间，配额线程据此判断保护期
+            # 记录效果结束时间，显示线程据此判断保护期
             self.last_effect_finished_at = time.time()
+            self.reset_page_after_effect(self.last_effect_finished_at)
 
     def handle_command(self, cmd):
         """处理命令"""
@@ -699,20 +835,28 @@ def main():
     parser.add_argument("--quota-interval", type=int, default=None,
                         help="配额轮询间隔（秒，默认 300）")
     parser.add_argument("--no-quota", action="store_true", help="关闭配额条功能")
+    parser.add_argument("--deepseek-api-key", default=None, help="DeepSeek API key")
+    parser.add_argument("--deepseek-api-base", default=None, help="DeepSeek API 域名")
+    parser.add_argument("--no-deepseek", action="store_true", help="关闭 DeepSeek 余额页")
+    parser.add_argument("--rotation-interval", type=int, default=None,
+                        help="两页轮播间隔（秒，默认 10）")
     parser.add_argument("--dry-run", action="store_true",
                         help="打印解析后的配置后退出，不连接设备")
     args = parser.parse_args()
 
     cfg = app_config.load_config(args.config)
     settings = app_config.resolve_settings(
-        args, cfg, claude_token=app_config.read_claude_settings_token())
+        args, cfg,
+        claude_token=app_config.read_claude_settings_token(),
+        claude_env=app_config.read_claude_settings_env())
 
     if args.dry_run:
         data = dataclasses.asdict(settings)
-        key = data.get("api_key") or ""
-        if key:
-            # 打码，避免把完整 key 留在终端记录里
-            data["api_key"] = "%s...%s" % (key[:6], key[-4:])
+        for field in ("api_key", "deepseek_api_key"):
+            key = data.get(field) or ""
+            if key:
+                # 打码，避免把完整 key 留在终端记录里
+                data[field] = "%s...%s" % (key[:6], key[-4:])
         print(json.dumps(data, indent=2, ensure_ascii=False))
         return 0
 
@@ -724,7 +868,11 @@ def main():
     daemon = YeelightDaemon(
         settings.ip, settings.port, settings.instance, settings.shared,
         settings.quota_enabled, settings.api_base, settings.api_key,
-        settings.poll_interval, settings.takeover_delay)
+        settings.poll_interval, settings.takeover_delay,
+        settings.deepseek_enabled, settings.deepseek_api_base,
+        settings.deepseek_api_key, settings.deepseek_poll_interval,
+        settings.deepseek_alternate_interval, settings.deepseek_state_path,
+        settings.rotation_interval)
 
     def signal_handler(sig, frame):
         print("\nShutting down...")
@@ -737,7 +885,7 @@ def main():
         return 1
 
     daemon.activate_direct_mode()
-    daemon.start_quota_thread()
+    daemon.start_display_thread()
     daemon.run_server()
 
     return 0

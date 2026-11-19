@@ -53,6 +53,33 @@ row1 |█████···············|   ← 周窗口
 row0 |█████···············|
 ```
 
+## DeepSeek 余额页
+
+如果你用 DeepSeek 的按量计费 API，灯上会多一页，与 MiniMax 页每 10 秒轮播：
+
+```
+|███·███ ··███·███|    品红 = 今日消费
+|··█···█ ····█·█·█|    白色 = 账户余额
+|███·███ ··███·███|
+|█·····█ ····█·█·█|
+|███·█··█ ··███·███|
+```
+
+- **今日消费** = 当天第一次看到的余额 − 当前余额。DeepSeek 没有公开的消费查询接口，
+  所以这个值是 daemon 自己按余额变化算出来的
+- 基线保存在 `quota_state.json`（已 gitignore），重启 daemon 不会丢失
+- 金额较大时（3 位数 + 3 位数放不下）会自动改为同一页内轮流显示
+- 余额 5 位以上会缩写成 `12K` / `1.2M`
+
+**配置**：在 `config.json` 里加 `deepseek.api_key`。如果 `~/.claude/settings.json`
+已经把 Claude Code 指向 DeepSeek，会自动复用那个 key，不用额外配置。
+
+```json
+"deepseek": { "enabled": true, "api_key": "sk-your-deepseek-key" }
+```
+
+关闭这一页：`--no-deepseek` 或 `"deepseek": { "enabled": false }`。
+
 ## 快速开始
 
 ### 1. 发现设备 IP
@@ -130,7 +157,7 @@ python3 yeelight-client.py --state done
 {
   "ip": "192.168.1.100",
   "instance": 0,
-  "quota": {
+  "minimax": {
     "enabled": true,
     "api_base": "https://api.minimaxi.com",
     "api_key": "sk-your-minimax-subscription-key",

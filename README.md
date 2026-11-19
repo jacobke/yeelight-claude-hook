@@ -53,6 +53,29 @@ row1 |█████···············|   ← weekly window
 row0 |█████···············|
 ```
 
+## DeepSeek Balance Page
+
+If you use DeepSeek's pay-as-you-go API, the lamp gains a second page that
+alternates with the MiniMax page every 10 seconds:
+
+```
+|███·███ ··███·███|    magenta = spent today
+|··█···█ ····█·█·█|    white   = account balance
+|███·███ ··███·███|
+|█·····█ ····█·█·█|
+|███·█··█ ··███·███|
+```
+
+- **Spent today** = the balance first seen today minus the current balance.
+  DeepSeek has no public spend query API, so this is derived from balance changes.
+- The baseline is stored in `quota_state.json` (git-ignored) and survives restarts.
+- When both amounts are large, the page switches to alternating the two values.
+- Balances of 10,000+ are abbreviated as `12K` / `1.2M`.
+
+Configure `deepseek.api_key` in `config.json`. If Claude Code is already pointed at
+DeepSeek in `~/.claude/settings.json`, that key is reused automatically.
+Disable with `--no-deepseek` or `"deepseek": { "enabled": false }`.
+
 ## Quick Start
 
 ### 1. Discover Device IP
@@ -130,7 +153,7 @@ Copy `config.json.example` to `config.json` and fill in your MiniMax subscriptio
 {
   "ip": "192.168.1.100",
   "instance": 0,
-  "quota": {
+  "minimax": {
     "enabled": true,
     "api_base": "https://api.minimaxi.com",
     "api_key": "sk-your-minimax-subscription-key",

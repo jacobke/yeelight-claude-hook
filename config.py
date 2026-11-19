@@ -15,6 +15,8 @@ from typing import Optional
 
 from quota import DEFAULT_API_BASE, POLL_INTERVAL_DEFAULT, TAKEOVER_DELAY_DEFAULT
 
+import deepseek
+
 DEFAULT_PORT = 55443
 CLAUDE_SETTINGS_PATH = "~/.claude/settings.json"
 
@@ -32,6 +34,13 @@ class Settings:
     api_key: str
     poll_interval: int
     takeover_delay: int
+    deepseek_enabled: bool
+    deepseek_api_base: str
+    deepseek_api_key: str
+    deepseek_poll_interval: int
+    deepseek_alternate_interval: int
+    deepseek_state_path: str
+    rotation_interval: int
 
 
 def default_config_path():
@@ -72,6 +81,21 @@ def read_claude_settings_token(path=None):
     return token if isinstance(token, str) else ""
 
 
+def read_claude_settings_env(path=None):
+    """读取 ~/.claude/settings.json 的 env 字典；失败返回空字典"""
+    if path is None:
+        path = os.path.expanduser(CLAUDE_SETTINGS_PATH)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    env = data.get("env")
+    return env if isinstance(env, dict) else {}
+
+
 def _int_or_none(value):
     """把配置值转成 int；不可转的返回 None（表示「未配置」）"""
     if value is None:
@@ -82,11 +106,14 @@ def _int_or_none(value):
         return None
 
 
-def resolve_settings(args, config, env=None, claude_token=""):
+def resolve_settings(args, config, env=None, claude_token="", claude_env=None):
     """把命令行参数、配置文件、环境变量合成一份 Settings"""
     env = os.environ if env is None else env
 
-    quota_cfg = config.get("quota")
+    # MiniMax 的配置段叫 minimax；旧版本叫 quota，保留兼容
+    quota_cfg = config.get("minimax")
+    if not isinstance(quota_cfg, dict):
+        quota_cfg = config.get("quota")
     if not isinstance(quota_cfg, dict):
         quota_cfg = {}
 
@@ -141,6 +168,53 @@ def resolve_settings(args, config, env=None, claude_token=""):
     else:
         quota_enabled = True
 
+    ds_cfg = config.get("deepseek")
+    if not isinstance(ds_cfg, dict):
+        ds_cfg = {}
+    rot_cfg = config.get("rotation")
+    if not isinstance(rot_cfg, dict):
+        rot_cfg = {}
+
+    deepseek_api_key = (
+        getattr(args, "deepseek_api_key", None)
+        or env.get("DEEPSEEK_API_KEY")
+        or ds_cfg.get("api_key")
+        or ""
+    )
+    if not deepseek_api_key and isinstance(claude_env, dict):
+        base_url = claude_env.get("ANTHROPIC_BASE_URL") or ""
+        if "deepseek" in str(base_url).lower():
+            deepseek_api_key = claude_env.get("ANTHROPIC_AUTH_TOKEN") or ""
+
+    deepseek_api_base = (
+        getattr(args, "deepseek_api_base", None)
+        or ds_cfg.get("api_base")
+        or deepseek.DEFAULT_API_BASE
+    )
+
+    deepseek_poll_interval = _int_or_none(ds_cfg.get("poll_interval"))
+    if deepseek_poll_interval is None:
+        deepseek_poll_interval = deepseek.POLL_INTERVAL_DEFAULT
+
+    deepseek_alternate_interval = _int_or_none(ds_cfg.get("alternate_interval"))
+    if deepseek_alternate_interval is None:
+        deepseek_alternate_interval = deepseek.ALTERNATE_INTERVAL_DEFAULT
+
+    deepseek_state_path = ds_cfg.get("state_path") or ""
+
+    rotation_interval = _int_or_none(getattr(args, "rotation_interval", None))
+    if rotation_interval is None:
+        rotation_interval = _int_or_none(rot_cfg.get("interval"))
+    if rotation_interval is None:
+        rotation_interval = 10
+
+    if getattr(args, "no_deepseek", False):
+        deepseek_enabled = False
+    elif "enabled" in ds_cfg:
+        deepseek_enabled = bool(ds_cfg["enabled"])
+    else:
+        deepseek_enabled = True
+
     return Settings(
         ip=ip,
         port=port,
@@ -151,4 +225,11 @@ def resolve_settings(args, config, env=None, claude_token=""):
         api_key=api_key,
         poll_interval=poll_interval,
         takeover_delay=takeover_delay,
+        deepseek_enabled=deepseek_enabled,
+        deepseek_api_base=deepseek_api_base,
+        deepseek_api_key=deepseek_api_key,
+        deepseek_poll_interval=deepseek_poll_interval,
+        deepseek_alternate_interval=deepseek_alternate_interval,
+        deepseek_state_path=deepseek_state_path,
+        rotation_interval=rotation_interval,
     )
