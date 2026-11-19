@@ -17,8 +17,8 @@ def make_args(**overrides):
     """构造一个模拟 argparse.Namespace 的参数对象"""
     defaults = dict(
         ip=None, port=None, instance=None, shared=None,
-        quota_api_key=None, quota_api_base=None, quota_interval=None,
-        no_quota=False,
+        minimax_api_key=None, minimax_api_base=None, minimax_interval=None,
+        no_minimax=False,
         deepseek_api_key=None, deepseek_api_base=None, no_deepseek=False,
         rotation_interval=None,
     )
@@ -33,10 +33,10 @@ class TestResolveSettings(unittest.TestCase):
         self.assertEqual(s.port, 55443)
         self.assertEqual(s.instance, 0)
         self.assertEqual(s.shared, 1)
-        self.assertTrue(s.quota_enabled)
-        self.assertEqual(s.api_base, "https://api.minimaxi.com")
-        self.assertEqual(s.api_key, "")
-        self.assertEqual(s.poll_interval, 300)
+        self.assertTrue(s.minimax_enabled)
+        self.assertEqual(s.minimax_api_base, "https://api.minimaxi.com")
+        self.assertEqual(s.minimax_api_key, "")
+        self.assertEqual(s.minimax_poll_interval, 300)
         self.assertEqual(s.takeover_delay, 20)
 
     def test_config_file_used_when_no_cli(self):
@@ -55,87 +55,87 @@ class TestResolveSettings(unittest.TestCase):
         self.assertEqual(s.port, 1234)
         self.assertEqual(s.instance, 3)
         self.assertEqual(s.shared, 2)
-        self.assertEqual(s.api_base, "https://api.minimax.io")
-        self.assertEqual(s.api_key, "from-config")
-        self.assertEqual(s.poll_interval, 60)
+        self.assertEqual(s.minimax_api_base, "https://api.minimax.io")
+        self.assertEqual(s.minimax_api_key, "from-config")
+        self.assertEqual(s.minimax_poll_interval, 60)
         self.assertEqual(s.takeover_delay, 5)
 
     def test_cli_beats_config(self):
         cfg = {"ip": "10.0.0.1", "quota": {"api_key": "from-config"}}
-        args = make_args(ip="10.0.0.9", quota_api_key="from-cli")
+        args = make_args(ip="10.0.0.9", minimax_api_key="from-cli")
         s = app_config.resolve_settings(args, cfg, env={}, claude_token="")
         self.assertEqual(s.ip, "10.0.0.9")
-        self.assertEqual(s.api_key, "from-cli")
+        self.assertEqual(s.minimax_api_key, "from-cli")
 
     def test_env_beats_config(self):
         cfg = {"quota": {"api_key": "from-config"}}
         s = app_config.resolve_settings(make_args(), cfg,
                                         env={"MINIMAX_API_KEY": "from-env"},
                                         claude_token="")
-        self.assertEqual(s.api_key, "from-env")
+        self.assertEqual(s.minimax_api_key, "from-env")
 
     def test_claude_settings_is_last_resort(self):
         s = app_config.resolve_settings(make_args(), {}, env={},
                                         claude_token="from-claude")
-        self.assertEqual(s.api_key, "from-claude")
+        self.assertEqual(s.minimax_api_key, "from-claude")
 
     def test_full_api_key_precedence(self):
         cfg = {"quota": {"api_key": "from-config"}}
         env = {"MINIMAX_API_KEY": "from-env"}
-        args = make_args(quota_api_key="from-cli")
+        args = make_args(minimax_api_key="from-cli")
         self.assertEqual(
             app_config.resolve_settings(args, cfg, env=env,
-                                        claude_token="from-claude").api_key,
+                                        claude_token="from-claude").minimax_api_key,
             "from-cli")
         self.assertEqual(
             app_config.resolve_settings(make_args(), cfg, env=env,
-                                        claude_token="from-claude").api_key,
+                                        claude_token="from-claude").minimax_api_key,
             "from-env")
         self.assertEqual(
             app_config.resolve_settings(make_args(), cfg, env={},
-                                        claude_token="from-claude").api_key,
+                                        claude_token="from-claude").minimax_api_key,
             "from-config")
 
     def test_no_quota_flag_disables(self):
-        s = app_config.resolve_settings(make_args(no_quota=True), {}, env={},
+        s = app_config.resolve_settings(make_args(no_minimax=True), {}, env={},
                                         claude_token="")
-        self.assertFalse(s.quota_enabled)
+        self.assertFalse(s.minimax_enabled)
 
     def test_config_can_disable_quota(self):
         cfg = {"quota": {"enabled": False}}
         s = app_config.resolve_settings(make_args(), cfg, env={},
                                         claude_token="")
-        self.assertFalse(s.quota_enabled)
+        self.assertFalse(s.minimax_enabled)
 
     def test_malformed_quota_section_is_ignored(self):
         cfg = {"quota": "not-a-dict"}
         s = app_config.resolve_settings(make_args(), cfg, env={}, claude_token="")
-        self.assertTrue(s.quota_enabled)
-        self.assertEqual(s.api_key, "")
+        self.assertTrue(s.minimax_enabled)
+        self.assertEqual(s.minimax_api_key, "")
 
     def test_minimax_section_is_read(self):
         cfg = {"minimax": {"api_key": "mm-key",
                            "api_base": "https://api.minimaxi.com",
                            "poll_interval": 120}}
         s = app_config.resolve_settings(make_args(), cfg, env={}, claude_token="")
-        self.assertEqual(s.api_key, "mm-key")
-        self.assertEqual(s.api_base, "https://api.minimaxi.com")
-        self.assertEqual(s.poll_interval, 120)
+        self.assertEqual(s.minimax_api_key, "mm-key")
+        self.assertEqual(s.minimax_api_base, "https://api.minimaxi.com")
+        self.assertEqual(s.minimax_poll_interval, 120)
 
     def test_legacy_quota_section_still_works(self):
         cfg = {"quota": {"api_key": "legacy-key"}}
         s = app_config.resolve_settings(make_args(), cfg, env={}, claude_token="")
-        self.assertEqual(s.api_key, "legacy-key")
+        self.assertEqual(s.minimax_api_key, "legacy-key")
 
     def test_minimax_section_wins_over_legacy_quota(self):
         cfg = {"minimax": {"api_key": "new"}, "quota": {"api_key": "old"}}
         s = app_config.resolve_settings(make_args(), cfg, env={}, claude_token="")
-        self.assertEqual(s.api_key, "new")
+        self.assertEqual(s.minimax_api_key, "new")
 
     def test_malformed_minimax_section_falls_back_to_legacy(self):
         cfg = {"minimax": "nope", "quota": {"api_key": "legacy"}}
         s = app_config.resolve_settings(make_args(), cfg, env={}, claude_token="")
-        self.assertEqual(s.api_key, "legacy")
+        self.assertEqual(s.minimax_api_key, "legacy")
 
 
 class TestLoadConfig(unittest.TestCase):

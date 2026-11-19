@@ -35,7 +35,7 @@ def main():
     parser = argparse.ArgumentParser(description="Yeelight Client")
     parser.add_argument("--state", "-s", required=True,
                         choices=['start', 'thinking', 'done', 'wait', 'interrupt',
-                                 'complete', 'end', 'off', 'quota'])
+                                 'complete', 'end', 'off', 'minimax'])
     parser.add_argument("--duration", "-d", type=float, default=5.0)
 
     args = parser.parse_args()

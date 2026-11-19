@@ -67,7 +67,7 @@ row0 |█████···············|
 
 - **今日消费** = 当天第一次看到的余额 − 当前余额。DeepSeek 没有公开的消费查询接口，
   所以这个值是 daemon 自己按余额变化算出来的
-- 基线保存在 `quota_state.json`（已 gitignore），重启 daemon 不会丢失
+- 基线保存在 `deepseek_state.json`（已 gitignore），重启 daemon 不会丢失
 - 金额较大时（3 位数 + 3 位数放不下）会自动改为同一页内轮流显示
 - 余额 5 位以上会缩写成 `12K` / `1.2M`
 
@@ -170,7 +170,7 @@ python3 yeelight-client.py --state done
 必须用 Token Plan 页面上的**订阅 key**，按量计费的 API key 会被配额接口拒绝。
 国际站请把 `api_base` 改成 `https://api.minimax.io`。
 
-API key 的取值顺序：`--quota-api-key` → 环境变量 `MINIMAX_API_KEY` →
+API key 的取值顺序：`--minimax-api-key` → 环境变量 `MINIMAX_API_KEY` →
 `config.json` → `~/.claude/settings.json` 里的 `ANTHROPIC_AUTH_TOKEN`
 （如果你已经把 Claude Code 指向 MiniMax，这条是零配置捷径）。
 
@@ -183,7 +183,7 @@ python3 yeelight-daemon.py --dry-run
 手动强制刷新一次：
 
 ```bash
-python3 yeelight-client.py --state quota
+python3 yeelight-client.py --state minimax
 ```
 
 配额条只在灯空闲时显示 —— hook 效果优先，效果结束后（延迟 `takeover_delay` 秒，
@@ -198,7 +198,7 @@ python3 yeelight-client.py --state quota
 | `yeelight-client.py` | 客户端，通过 Unix Socket 通信 |
 | `yeelight-hook.py` | 独立脚本模式（备用） |
 | `discover.py` | 发现局域网内的 Yeelight 设备 |
-| `quota.py` | MiniMax 配额查询与进度条渲染 |
+| `minimax.py` | MiniMax 配额查询与进度条渲染 |
 | `config.py` | 配置加载（config.json、环境变量、命令行） |
 | `com.yeelight.daemon.plist.template` | launchd 配置模板 |
 

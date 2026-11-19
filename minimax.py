@@ -58,12 +58,12 @@ RESET_STOPS = (
 RESET_TRACK = (36, 36, 36)
 
 
-class QuotaError(Exception):
+class MinimaxError(Exception):
     """配额查询或解析失败"""
 
 
 @dataclass(frozen=True)
-class QuotaSnapshot:
+class MinimaxSnapshot:
     """某一时刻的配额快照"""
 
     interval_pct: int       # 5 小时滚动窗口剩余百分比，0..100
@@ -101,13 +101,13 @@ def _to_int(value):
 
 
 def parse_remains(body):
-    """解析 /v1/token_plan/remains 的响应体 → QuotaSnapshot。结构不符抛 QuotaError"""
+    """解析 /v1/token_plan/remains 的响应体 → MinimaxSnapshot。结构不符抛 MinimaxError"""
     if not isinstance(body, dict):
-        raise QuotaError("响应不是 JSON 对象")
+        raise MinimaxError("响应不是 JSON 对象")
 
     base_resp = body.get("base_resp")
     if not isinstance(base_resp, dict):
-        raise QuotaError("响应缺少 base_resp")
+        raise MinimaxError("响应缺少 base_resp")
     status = base_resp.get("status_code")
     if isinstance(status, bool):
         # bool 不是合法的状态码：True/False 一律当错误，避免 False 被当成 0 成功
@@ -120,12 +120,12 @@ def parse_remains(body):
         except (TypeError, ValueError, OverflowError):
             status = -1
     if status != 0:
-        raise QuotaError("MiniMax API 错误: %s (status_code=%s)"
+        raise MinimaxError("MiniMax API 错误: %s (status_code=%s)"
                          % (base_resp.get("status_msg", ""), status))
 
     entries = body.get("model_remains")
     if not isinstance(entries, list) or not entries:
-        raise QuotaError("响应缺少 model_remains 数据")
+        raise MinimaxError("响应缺少 model_remains 数据")
 
     entry = None
     for item in entries:
@@ -139,9 +139,9 @@ def parse_remains(body):
                 entry = item
                 break
     if not isinstance(entry, dict):
-        raise QuotaError("model_remains 条目格式异常")
+        raise MinimaxError("model_remains 条目格式异常")
 
-    return QuotaSnapshot(
+    return MinimaxSnapshot(
         interval_pct=_clamp_pct(entry.get("current_interval_remaining_percent")),
         weekly_pct=_clamp_pct(entry.get("current_weekly_remaining_percent")),
         interval_reset_at=_to_int(entry.get("end_time")),
@@ -251,9 +251,9 @@ def render_bar(interval_pct, weekly_pct, reset_pct=None):
 
 
 def fetch_quota(api_key, api_base=DEFAULT_API_BASE, timeout=10.0):
-    """请求 MiniMax 配额接口 → QuotaSnapshot。任何失败都抛 QuotaError"""
+    """请求 MiniMax 配额接口 → MinimaxSnapshot。任何失败都抛 MinimaxError"""
     if not api_key:
-        raise QuotaError("未配置 MiniMax API key")
+        raise MinimaxError("未配置 MiniMax API key")
 
     try:
         url = api_base.rstrip("/") + "/v1/token_plan/remains"
@@ -266,22 +266,22 @@ def fetch_quota(api_key, api_base=DEFAULT_API_BASE, timeout=10.0):
             method="GET",
         )
     except (AttributeError, TypeError, ValueError) as e:
-        # api_base 配错（不是字符串 / URL 格式非法）也要变成 QuotaError
-        raise QuotaError("MiniMax API 地址非法: %s" % e) from e
+        # api_base 配错（不是字符串 / URL 格式非法）也要变成 MinimaxError
+        raise MinimaxError("MiniMax API 地址非法: %s" % e) from e
 
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             raw = response.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as e:
-        raise QuotaError("MiniMax API HTTP %s" % e.code) from e
+        raise MinimaxError("MiniMax API HTTP %s" % e.code) from e
     except urllib.error.URLError as e:
-        raise QuotaError("MiniMax API 网络错误: %s" % e.reason) from e
+        raise MinimaxError("MiniMax API 网络错误: %s" % e.reason) from e
     except OSError as e:
-        raise QuotaError("MiniMax API 请求失败: %s" % e) from e
+        raise MinimaxError("MiniMax API 请求失败: %s" % e) from e
 
     try:
         body = json.loads(raw)
     except ValueError as e:
-        raise QuotaError("MiniMax API 返回的不是合法 JSON") from e
+        raise MinimaxError("MiniMax API 返回的不是合法 JSON") from e
 
     return parse_remains(body)

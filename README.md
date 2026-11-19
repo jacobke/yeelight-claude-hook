@@ -68,7 +68,7 @@ alternates with the MiniMax page every 10 seconds:
 
 - **Spent today** = the balance first seen today minus the current balance.
   DeepSeek has no public spend query API, so this is derived from balance changes.
-- The baseline is stored in `quota_state.json` (git-ignored) and survives restarts.
+- The baseline is stored in `deepseek_state.json` (git-ignored) and survives restarts.
 - When both amounts are large, the page switches to alternating the two values.
 - Balances of 10,000+ are abbreviated as `12K` / `1.2M`.
 
@@ -167,7 +167,7 @@ Use a **subscription key** from the Token Plan page, not a pay-as-you-go API key
 the quota endpoint rejects the latter. For the international site use
 `https://api.minimax.io` as `api_base`.
 
-The API key is resolved in this order: `--quota-api-key` → `MINIMAX_API_KEY`
+The API key is resolved in this order: `--minimax-api-key` → `MINIMAX_API_KEY`
 environment variable → `config.json` → `ANTHROPIC_AUTH_TOKEN` in
 `~/.claude/settings.json` (a zero-config shortcut if you already point Claude Code at
 MiniMax).
@@ -181,7 +181,7 @@ python3 yeelight-daemon.py --dry-run
 Force an immediate repaint:
 
 ```bash
-python3 yeelight-client.py --state quota
+python3 yeelight-client.py --state minimax
 ```
 
 The meter only paints while the lamp is idle — hook effects take priority, and the
@@ -197,7 +197,7 @@ reached the lamp keeps showing the last good reading rather than going dark.
 | `yeelight-client.py` | Client for Unix Socket communication |
 | `yeelight-hook.py` | Standalone script (not recommended) |
 | `discover.py` | Discover Yeelight devices on LAN |
-| `quota.py` | MiniMax Token Plan client and quota bar rendering |
+| `minimax.py` | MiniMax Token Plan client and quota bar rendering |
 | `config.py` | Configuration loading (config.json, env vars, CLI) |
 | `com.yeelight.daemon.plist.template` | launchd template |
 

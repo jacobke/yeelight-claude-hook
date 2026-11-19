@@ -20,5 +20,5 @@ config.json
 *.local.json
 
 # Runtime state
-quota_state.json
-quota_state.json.tmp
+deepseek_state.json
+deepseek_state.json.tmp

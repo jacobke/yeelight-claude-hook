@@ -13,7 +13,7 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 
-from quota import DEFAULT_API_BASE, POLL_INTERVAL_DEFAULT, TAKEOVER_DELAY_DEFAULT
+from minimax import DEFAULT_API_BASE, POLL_INTERVAL_DEFAULT, TAKEOVER_DELAY_DEFAULT
 
 import deepseek
 
@@ -29,10 +29,10 @@ class Settings:
     port: int
     instance: int
     shared: int
-    quota_enabled: bool
-    api_base: str
-    api_key: str
-    poll_interval: int
+    minimax_enabled: bool
+    minimax_api_base: str
+    minimax_api_key: str
+    minimax_poll_interval: int
     takeover_delay: int
     deepseek_enabled: bool
     deepseek_api_base: str
@@ -111,16 +111,16 @@ def resolve_settings(args, config, env=None, claude_token="", claude_env=None):
     env = os.environ if env is None else env
 
     # MiniMax 的配置段叫 minimax；旧版本叫 quota，保留兼容
-    quota_cfg = config.get("minimax")
-    if not isinstance(quota_cfg, dict):
-        quota_cfg = config.get("quota")
-    if not isinstance(quota_cfg, dict):
-        quota_cfg = {}
+    minimax_cfg = config.get("minimax")
+    if not isinstance(minimax_cfg, dict):
+        minimax_cfg = config.get("quota")
+    if not isinstance(minimax_cfg, dict):
+        minimax_cfg = {}
 
     api_key = (
-        getattr(args, "quota_api_key", None)
+        getattr(args, "minimax_api_key", None)
         or env.get("MINIMAX_API_KEY")
-        or quota_cfg.get("api_key")
+        or minimax_cfg.get("api_key")
         or claude_token
         or ""
     )
@@ -146,27 +146,27 @@ def resolve_settings(args, config, env=None, claude_token="", claude_env=None):
         shared = 1
 
     api_base = (
-        getattr(args, "quota_api_base", None)
-        or quota_cfg.get("api_base")
+        getattr(args, "minimax_api_base", None)
+        or minimax_cfg.get("api_base")
         or DEFAULT_API_BASE
     )
 
-    poll_interval = _int_or_none(getattr(args, "quota_interval", None))
+    poll_interval = _int_or_none(getattr(args, "minimax_interval", None))
     if poll_interval is None:
-        poll_interval = _int_or_none(quota_cfg.get("poll_interval"))
+        poll_interval = _int_or_none(minimax_cfg.get("poll_interval"))
     if poll_interval is None:
         poll_interval = POLL_INTERVAL_DEFAULT
 
-    takeover_delay = _int_or_none(quota_cfg.get("takeover_delay"))
+    takeover_delay = _int_or_none(minimax_cfg.get("takeover_delay"))
     if takeover_delay is None:
         takeover_delay = TAKEOVER_DELAY_DEFAULT
 
-    if getattr(args, "no_quota", False):
-        quota_enabled = False
-    elif "enabled" in quota_cfg:
-        quota_enabled = bool(quota_cfg["enabled"])
+    if getattr(args, "no_minimax", False):
+        minimax_enabled = False
+    elif "enabled" in minimax_cfg:
+        minimax_enabled = bool(minimax_cfg["enabled"])
     else:
-        quota_enabled = True
+        minimax_enabled = True
 
     ds_cfg = config.get("deepseek")
     if not isinstance(ds_cfg, dict):
@@ -220,10 +220,10 @@ def resolve_settings(args, config, env=None, claude_token="", claude_env=None):
         port=port,
         instance=instance,
         shared=shared,
-        quota_enabled=quota_enabled,
-        api_base=api_base,
-        api_key=api_key,
-        poll_interval=poll_interval,
+        minimax_enabled=minimax_enabled,
+        minimax_api_base=api_base,
+        minimax_api_key=api_key,
+        minimax_poll_interval=poll_interval,
         takeover_delay=takeover_delay,
         deepseek_enabled=deepseek_enabled,
         deepseek_api_base=deepseek_api_base,

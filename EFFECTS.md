@@ -71,7 +71,7 @@
 - **耗尽**: 剩余 0% 时保留一个压暗的告警色点（暗红 / 暗紫），避免和「功能未启用」或「灯坏了」混淆
 - **数据源**: `GET {api_base}/v1/token_plan/remains`，默认每 5 分钟查询一次
 - **时机**: 仅在空闲时显示；hook 效果优先，效果结束后延迟 20 秒接管
-- **触发**: daemon 内置配额线程自动刷新；`--state quota` 可手动强制刷新
+- **触发**: daemon 内置配额线程自动刷新；`--state minimax` 可手动强制刷新
 
 ### DEEPSEEK (余额页)
 
@@ -82,7 +82,7 @@
 - **自适应**: 两个数字放不下时（如 3 位数 + 3 位数），改为页内轮流显示，各 5 秒
 - **缩写**: 余额 ≥ 1 万显示 `12K`，≥ 100 万显示 `1.2M`
 - **数据源**: `GET https://api.deepseek.com/user/balance`，默认每 5 分钟查询
-- **今日消费**: 当天起点余额 − 当前余额；基线存 `quota_state.json`
+- **今日消费**: 当天起点余额 − 当前余额；基线存 `deepseek_state.json`
 
 ---
 
@@ -208,5 +208,5 @@ python3 yeelight-hook.py --state wait --duration 5
 python3 yeelight-hook.py --state interrupt
 python3 yeelight-hook.py --state end
 python3 yeelight-hook.py --state off
-python3 yeelight-client.py --state quota
+python3 yeelight-client.py --state minimax
 ```

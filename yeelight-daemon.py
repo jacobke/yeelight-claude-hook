@@ -22,7 +22,7 @@ import struct
 import threading
 
 import config as app_config
-import quota
+import minimax
 import deepseek
 
 # ============================================================================
@@ -37,7 +37,7 @@ ROWS, COLS = 5, 20
 # 所有可用的效果状态
 VALID_STATES = [
     "start", "thinking", "done", "wait", "interrupt",
-    "complete", "end", "off", "quota",
+    "complete", "end", "off", "minimax",
 ]
 
 # ============================================================================
@@ -155,9 +155,11 @@ def render_centered_with_bg(text, text_color, bg_color):
 
 class YeelightDaemon:
     def __init__(self, ip, port=55443, instance=0, shared=1,
-                 quota_enabled=False, api_base=quota.DEFAULT_API_BASE,
-                 api_key="", poll_interval=quota.POLL_INTERVAL_DEFAULT,
-                 takeover_delay=quota.TAKEOVER_DELAY_DEFAULT,
+                 minimax_enabled=False,
+                 minimax_api_base=minimax.DEFAULT_API_BASE,
+                 minimax_api_key="",
+                 minimax_poll_interval=minimax.POLL_INTERVAL_DEFAULT,
+                 takeover_delay=minimax.TAKEOVER_DELAY_DEFAULT,
                  deepseek_enabled=False,
                  deepseek_api_base=deepseek.DEFAULT_API_BASE,
                  deepseek_api_key="",
@@ -182,18 +184,18 @@ class YeelightDaemon:
         self.command_interval = float(self.shared)
 
         # ===== MiniMax 配额条 =====
-        self.quota_enabled = quota_enabled and bool(api_key)
-        self.api_base = api_base
-        self.api_key = api_key
-        self.poll_interval = poll_interval
+        self.minimax_enabled = minimax_enabled and bool(minimax_api_key)
+        self.minimax_api_base = minimax_api_base
+        self.minimax_api_key = minimax_api_key
+        self.minimax_poll_interval = minimax_poll_interval
         self.takeover_delay = takeover_delay
-        self.quota_thread = None            # 配额轮询线程
-        self.last_snapshot = None           # 最近一次成功拉到的快照（缓存）
-        self.last_rendered = None           # 最近一次画到屏幕上的快照
-        self.last_reset_fill = None         # 最近一次画出的重置倒计时列数
-        self.quota_needs_repaint = True     # 效果抢过屏幕后置位
-        self.last_quota_fetch_at = 0.0      # 最近一次尝试拉取的时间戳
-        self.last_effect_finished_at = time.time()  # 启动后立即允许显示配额条
+        self.display_thread = None              # 显示线程（轮播两个页面）
+        self.minimax_snapshot = None             # 最近一次成功拉到的配额快照（缓存）
+        self.last_minimax_rendered = None        # 最近一次画出的 MiniMax 页
+        self.last_minimax_reset_fill = None      # 最近一次画出的重置倒计时列数
+        self.display_needs_repaint = True        # 效果抢过屏幕后置位
+        self.minimax_last_fetch_at = 0.0         # 最近一次尝试拉取的时间戳
+        self.last_effect_finished_at = time.time()  # 启动后立即允许显示
 
         # ===== DeepSeek 余额页 =====
         self.deepseek_enabled = deepseek_enabled and bool(deepseek_api_key)
@@ -205,7 +207,7 @@ class YeelightDaemon:
         self.deepseek_tracker = None
         if self.deepseek_enabled:
             state_path = deepseek_state_path or os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "quota_state.json")
+                os.path.dirname(os.path.abspath(__file__)), "deepseek_state.json")
             self.deepseek_tracker = deepseek.SpendTracker(state_path)
         self.direct_mode_ready = False
         self.deepseek_balance = None
@@ -370,7 +372,7 @@ class YeelightDaemon:
     # MiniMax 配额条
     # ========================================================================
 
-    def quota_snapshot_if_available(self, now=None):
+    def minimax_snapshot_if_available(self, now=None):
         """取当前可用的配额快照（带缓存）。
 
         缓存新鲜时直接复用；过期时请求接口。请求失败时返回上一次成功的快照
@@ -378,20 +380,20 @@ class YeelightDaemon:
         """
         if now is None:
             now = time.time()
-        if (self.last_snapshot is not None
-                and now - self.last_quota_fetch_at < self.poll_interval):
-            return self.last_snapshot
+        if (self.minimax_snapshot is not None
+                and now - self.minimax_last_fetch_at < self.minimax_poll_interval):
+            return self.minimax_snapshot
 
         try:
-            snapshot = quota.fetch_quota(self.api_key, self.api_base)
-        except quota.QuotaError as e:
-            print("Quota fetch failed: %s" % e, file=sys.stderr, flush=True)
+            snapshot = minimax.fetch_quota(self.minimax_api_key, self.minimax_api_base)
+        except minimax.MinimaxError as e:
+            print("MiniMax fetch failed: %s" % e, file=sys.stderr, flush=True)
             # 失败也要等一个轮询周期再重试
-            self.last_quota_fetch_at = now
-            return self.last_snapshot
+            self.minimax_last_fetch_at = now
+            return self.minimax_snapshot
 
-        self.last_snapshot = snapshot
-        self.last_quota_fetch_at = now
+        self.minimax_snapshot = snapshot
+        self.minimax_last_fetch_at = now
         return snapshot
 
     def deepseek_values_if_available(self, now=None):
@@ -424,7 +426,7 @@ class YeelightDaemon:
     def available_pages(self, now=None):
         """当前可显示的页面列表（顺序即轮播顺序）"""
         pages = []
-        if self.quota_enabled and self.quota_snapshot_if_available(now) is not None:
+        if self.minimax_enabled and self.minimax_snapshot_if_available(now) is not None:
             pages.append("minimax")
         if (self.deepseek_enabled
                 and self.deepseek_values_if_available(now) is not None):
@@ -444,7 +446,7 @@ class YeelightDaemon:
         """是否需要重绘当前屏幕（可能顺带切换页面）"""
         if now is None:
             now = time.time()
-        if not self.quota_enabled and not self.deepseek_enabled:
+        if not self.minimax_enabled and not self.deepseek_enabled:
             return False
         if self.effect_thread and self.effect_thread.is_alive():
             return False
@@ -484,17 +486,17 @@ class YeelightDaemon:
                 key = (mode, tuple(texts), self.deepseek_subpage)
             else:
                 key = (mode, tuple(texts), 0)
-            return key != self.last_deepseek_rendered or self.quota_needs_repaint
+            return key != self.last_deepseek_rendered or self.display_needs_repaint
 
         # MiniMax 页
-        snapshot = self.quota_snapshot_if_available(now)
+        snapshot = self.minimax_snapshot_if_available(now)
         if snapshot is None:
             return False
-        if snapshot.differs_from(self.last_rendered) or self.quota_needs_repaint:
+        if snapshot.differs_from(self.last_minimax_rendered) or self.display_needs_repaint:
             return True
-        reset_pct = quota.reset_progress_pct(snapshot.interval_reset_at,
+        reset_pct = minimax.reset_progress_pct(snapshot.interval_reset_at,
                                              now_ms=int(now * 1000))
-        return quota.reset_fill_columns(reset_pct) != self.last_reset_fill
+        return minimax.reset_fill_columns(reset_pct) != self.last_minimax_reset_fill
 
     def _takeover_and_send(self, grid):
         """必要时接管设备（停内置效果、进 direct 模式），然后发像素"""
@@ -505,17 +507,17 @@ class YeelightDaemon:
             self.direct_mode_ready = True
         self.send_pixels_with_mark(grid)
 
-    def paint_quota(self, snapshot):
+    def paint_minimax(self, snapshot):
         """接管屏幕并画出 MiniMax 配额页"""
         now = time.time()
-        reset_pct = quota.reset_progress_pct(snapshot.interval_reset_at,
+        reset_pct = minimax.reset_progress_pct(snapshot.interval_reset_at,
                                              now_ms=int(now * 1000))
-        grid = quota.render_bar(snapshot.interval_pct, snapshot.weekly_pct,
+        grid = minimax.render_bar(snapshot.interval_pct, snapshot.weekly_pct,
                                 reset_pct)
         self._takeover_and_send(grid)
-        self.last_rendered = snapshot
-        self.last_reset_fill = quota.reset_fill_columns(reset_pct)
-        self.quota_needs_repaint = False
+        self.last_minimax_rendered = snapshot
+        self.last_minimax_reset_fill = minimax.reset_fill_columns(reset_pct)
+        self.display_needs_repaint = False
 
     def paint_current_page(self):
         """画出当前页"""
@@ -529,11 +531,11 @@ class YeelightDaemon:
             grid = deepseek.render_page(mode, texts, index)
             self._takeover_and_send(grid)
             self.last_deepseek_rendered = (mode, tuple(texts), index)
-            self.quota_needs_repaint = False
+            self.display_needs_repaint = False
             return
-        snapshot = self.quota_snapshot_if_available(now)
+        snapshot = self.minimax_snapshot_if_available(now)
         if snapshot is not None:
-            self.paint_quota(snapshot)
+            self.paint_minimax(snapshot)
 
     def display_tick(self):
         """显示线程的一轮：判断并（必要时）绘制一次。返回是否绘制了"""
@@ -553,11 +555,11 @@ class YeelightDaemon:
 
     def start_display_thread(self):
         """启动显示线程（两个数据源都不可用时不启动）"""
-        if not self.quota_enabled and not self.deepseek_enabled:
+        if not self.minimax_enabled and not self.deepseek_enabled:
             print("Display disabled (no API key)", file=sys.stderr, flush=True)
             return
-        self.quota_thread = threading.Thread(target=self.display_loop, daemon=True)
-        self.quota_thread.start()
+        self.display_thread = threading.Thread(target=self.display_loop, daemon=True)
+        self.display_thread.start()
 
     # ========================================================================
     # 效果方法
@@ -692,13 +694,13 @@ class YeelightDaemon:
         # count=0 无限循环, action=1 保持最后状态（亮）
         self.send_command("start_cf", [0, 1, flow_string])
 
-    def effect_quota(self):
+    def effect_minimax(self):
         """立即绘制一次配额条（调试 / 手动刷新用）"""
-        snapshot = self.quota_snapshot_if_available()
+        snapshot = self.minimax_snapshot_if_available()
         if snapshot is None:
-            print("No quota data available", file=sys.stderr, flush=True)
+            print("No MiniMax data available", file=sys.stderr, flush=True)
             return
-        self.paint_quota(snapshot)
+        self.paint_minimax(snapshot)
 
     def effect_end(self, duration=2.0):
         """红色渐出"""
@@ -722,14 +724,14 @@ class YeelightDaemon:
         """运行效果（在独立线程中）"""
         self.interrupted = False  # 重置中断标志
         # 效果抢过了屏幕，回来后需要重画一次配额条
-        self.quota_needs_repaint = True
+        self.display_needs_repaint = True
         # 效果会重配设备模式（尤其 complete 的 start_cf），需要重新接管
         self.direct_mode_ready = False
 
         try:
             # 对于点阵效果，确保先进入 direct mode
             # complete 使用内置效果，不需要 direct mode
-            if state not in ["complete", "off", "quota"]:
+            if state not in ["complete", "off", "minimax"]:
                 self.send_command("stop_cf", [])  # 停止内置效果
                 time.sleep(0.1)
                 self.send_command("set_power", ["on"])
@@ -746,7 +748,7 @@ class YeelightDaemon:
                 "complete": lambda: self.effect_complete(),
                 "end": lambda: self.effect_end(duration),
                 "off": lambda: self.effect_off(),
-                "quota": lambda: self.effect_quota(),
+                "minimax": lambda: self.effect_minimax(),
             }
 
             handler = handlers.get(state)
@@ -830,11 +832,11 @@ def main():
                              "Each daemon will limit to 60/shared commands per minute.")
     parser.add_argument("--config", default=None,
                         help="配置文件路径 (默认: 脚本同目录的 config.json)")
-    parser.add_argument("--quota-api-key", default=None, help="MiniMax API key")
-    parser.add_argument("--quota-api-base", default=None, help="MiniMax API 域名")
-    parser.add_argument("--quota-interval", type=int, default=None,
+    parser.add_argument("--minimax-api-key", default=None, help="MiniMax API key")
+    parser.add_argument("--minimax-api-base", default=None, help="MiniMax API 域名")
+    parser.add_argument("--minimax-interval", type=int, default=None,
                         help="配额轮询间隔（秒，默认 300）")
-    parser.add_argument("--no-quota", action="store_true", help="关闭配额条功能")
+    parser.add_argument("--no-minimax", action="store_true", help="关闭配额条功能")
     parser.add_argument("--deepseek-api-key", default=None, help="DeepSeek API key")
     parser.add_argument("--deepseek-api-base", default=None, help="DeepSeek API 域名")
     parser.add_argument("--no-deepseek", action="store_true", help="关闭 DeepSeek 余额页")
@@ -852,7 +854,7 @@ def main():
 
     if args.dry_run:
         data = dataclasses.asdict(settings)
-        for field in ("api_key", "deepseek_api_key"):
+        for field in ("minimax_api_key", "deepseek_api_key"):
             key = data.get(field) or ""
             if key:
                 # 打码，避免把完整 key 留在终端记录里
@@ -867,8 +869,9 @@ def main():
 
     daemon = YeelightDaemon(
         settings.ip, settings.port, settings.instance, settings.shared,
-        settings.quota_enabled, settings.api_base, settings.api_key,
-        settings.poll_interval, settings.takeover_delay,
+        settings.minimax_enabled, settings.minimax_api_base,
+        settings.minimax_api_key, settings.minimax_poll_interval,
+        settings.takeover_delay,
         settings.deepseek_enabled, settings.deepseek_api_base,
         settings.deepseek_api_key, settings.deepseek_poll_interval,
         settings.deepseek_alternate_interval, settings.deepseek_state_path,
