@@ -328,6 +328,88 @@ class YeelightDaemon:
         self.send_pixels(grid)
 
     # ========================================================================
+    # MiniMax 配额条
+    # ========================================================================
+
+    def quota_snapshot_if_available(self, now=None):
+        """取当前可用的配额快照（带缓存）。
+
+        缓存新鲜时直接复用；过期时请求接口。请求失败时返回上一次成功的快照
+        （可能为 None），这样接口临时故障不会让画面消失。
+        """
+        if now is None:
+            now = time.time()
+        if (self.last_snapshot is not None
+                and now - self.last_quota_fetch_at < self.poll_interval):
+            return self.last_snapshot
+
+        try:
+            snapshot = quota.fetch_quota(self.api_key, self.api_base)
+        except quota.QuotaError as e:
+            print("Quota fetch failed: %s" % e, file=sys.stderr, flush=True)
+            # 失败也要等一个轮询周期再重试
+            self.last_quota_fetch_at = now
+            return self.last_snapshot
+
+        self.last_snapshot = snapshot
+        self.last_quota_fetch_at = now
+        return snapshot
+
+    def quota_should_paint(self, now=None):
+        """判断当前是否应该画一次配额条（不产生绘制副作用）"""
+        if not self.quota_enabled:
+            return False
+        if self.effect_thread and self.effect_thread.is_alive():
+            return False
+        if now is None:
+            now = time.time()
+        if now - self.last_effect_finished_at < self.takeover_delay:
+            return False
+        snapshot = self.quota_snapshot_if_available(now)
+        if snapshot is None:
+            return False
+        return snapshot.differs_from(self.last_rendered) or self.quota_needs_repaint
+
+    def paint_quota(self, snapshot):
+        """接管屏幕并画出配额条"""
+        grid = quota.render_bar(snapshot.interval_pct, snapshot.weekly_pct)
+        # 接管序列：停掉设备端内置效果（complete 的绿色呼吸），回到 direct 模式
+        self.send_command("stop_cf", [])
+        self.send_command("set_power", ["on"])
+        self.send_command("activate_fx_mode", [{"mode": "direct"}])
+        self.send_pixels_with_mark(grid)
+        self.last_rendered = snapshot
+        self.quota_needs_repaint = False
+
+    def quota_tick(self):
+        """配额线程的一轮：判断并（必要时）绘制一次配额条。返回是否绘制了"""
+        if not self.quota_should_paint():
+            return False
+        snapshot = self.quota_snapshot_if_available()
+        if snapshot is None:
+            return False
+        self.paint_quota(snapshot)
+        return True
+
+    def quota_loop(self):
+        """配额线程主循环"""
+        while self.running:
+            time.sleep(1)
+            try:
+                self.quota_tick()
+            except Exception as e:
+                print("Quota loop error: %s" % e, file=sys.stderr, flush=True)
+
+    def start_quota_thread(self):
+        """启动配额线程（未配置 API key 时不启动）"""
+        if not self.quota_enabled:
+            print("Quota meter disabled (no API key or --no-quota)",
+                  file=sys.stderr, flush=True)
+            return
+        self.quota_thread = threading.Thread(target=self.quota_loop, daemon=True)
+        self.quota_thread.start()
+
+    # ========================================================================
     # 效果方法
     # ========================================================================
 
@@ -481,31 +563,37 @@ class YeelightDaemon:
     def run_effect(self, state, duration=5.0):
         """运行效果（在独立线程中）"""
         self.interrupted = False  # 重置中断标志
+        # 效果抢过了屏幕，回来后需要重画一次配额条
+        self.quota_needs_repaint = True
 
-        # 对于点阵效果，确保先进入 direct mode
-        # complete 使用内置效果，不需要 direct mode
-        if state not in ["complete", "off"]:
-            self.send_command("stop_cf", [])  # 停止内置效果
-            time.sleep(0.1)
-            self.send_command("set_power", ["on"])
-            time.sleep(0.1)
-            self.send_command("activate_fx_mode", [{"mode": "direct"}])
-            time.sleep(0.2)
+        try:
+            # 对于点阵效果，确保先进入 direct mode
+            # complete 使用内置效果，不需要 direct mode
+            if state not in ["complete", "off"]:
+                self.send_command("stop_cf", [])  # 停止内置效果
+                time.sleep(0.1)
+                self.send_command("set_power", ["on"])
+                time.sleep(0.1)
+                self.send_command("activate_fx_mode", [{"mode": "direct"}])
+                time.sleep(0.2)
 
-        handlers = {
-            "start": lambda: self.effect_start(duration),
-            "thinking": lambda: self.effect_thinking(duration),
-            "done": lambda: self.effect_done(),
-            "wait": lambda: self.effect_wait(duration),
-            "interrupt": lambda: self.effect_interrupt(),
-            "complete": lambda: self.effect_complete(),
-            "end": lambda: self.effect_end(duration),
-            "off": lambda: self.effect_off(),
-        }
+            handlers = {
+                "start": lambda: self.effect_start(duration),
+                "thinking": lambda: self.effect_thinking(duration),
+                "done": lambda: self.effect_done(),
+                "wait": lambda: self.effect_wait(duration),
+                "interrupt": lambda: self.effect_interrupt(),
+                "complete": lambda: self.effect_complete(),
+                "end": lambda: self.effect_end(duration),
+                "off": lambda: self.effect_off(),
+            }
 
-        handler = handlers.get(state)
-        if handler:
-            handler()
+            handler = handlers.get(state)
+            if handler:
+                handler()
+        finally:
+            # 记录效果结束时间，配额线程据此判断保护期
+            self.last_effect_finished_at = time.time()
 
     def handle_command(self, cmd):
         """处理命令"""
@@ -623,6 +711,7 @@ def main():
         return 1
 
     daemon.activate_direct_mode()
+    daemon.start_quota_thread()
     daemon.run_server()
 
     return 0
