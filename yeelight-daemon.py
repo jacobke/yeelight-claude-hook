@@ -397,8 +397,9 @@ class YeelightDaemon:
             return None
         if now is None:
             now = time.time()
-        if (self.deepseek_balance is not None
-                and now - self.deepseek_last_fetch_at < self.deepseek_poll_interval):
+        if now - self.deepseek_last_fetch_at < self.deepseek_poll_interval:
+            if self.deepseek_balance is None:
+                return None
             return (self.deepseek_spend, self.deepseek_balance)
 
         try:
@@ -444,8 +445,7 @@ class YeelightDaemon:
             return False
         if self.effect_thread and self.effect_thread.is_alive():
             return False
-        if (self.last_effect_finished_at
-                and now - self.last_effect_finished_at < self.takeover_delay):
+        if now - self.last_effect_finished_at < self.takeover_delay:
             return False
 
         pages = self.available_pages(now)

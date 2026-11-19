@@ -250,7 +250,7 @@ class TestPageRotation(unittest.TestCase):
     def _daemon_with_both_pages(self, **overrides):
         d = make_daemon(deepseek_enabled=True, deepseek_api_key="k",
                         deepseek_balance=58.0, deepseek_spend=3.2,
-                        last_effect_finished_at=0.0, quota_needs_repaint=False)
+                        last_effect_finished_at=-1000.0, quota_needs_repaint=False)
         d.quota_snapshot_if_available = lambda now=None: quota.QuotaSnapshot(50, 50)
         d.deepseek_values_if_available = lambda now=None: (d.deepseek_spend,
                                                            d.deepseek_balance)
@@ -268,7 +268,7 @@ class TestPageRotation(unittest.TestCase):
     def test_single_page_never_rotates(self):
         d = make_daemon(deepseek_enabled=False, quota_needs_repaint=False,
                         last_rendered=quota.QuotaSnapshot(50, 50),
-                        last_effect_finished_at=0.0)
+                        last_effect_finished_at=-1000.0)
         d.quota_snapshot_if_available = lambda now=None: quota.QuotaSnapshot(50, 50)
         self.assertFalse(d.display_should_paint(now=1000.0))
         self.assertEqual(d.page, "minimax")
@@ -304,11 +304,49 @@ class TestPageRotation(unittest.TestCase):
         d = make_daemon(deepseek_enabled=True, deepseek_api_key="k",
                         quota_needs_repaint=False,
                         last_rendered=quota.QuotaSnapshot(50, 50),
-                        last_effect_finished_at=0.0, page="deepseek")
+                        last_effect_finished_at=-1000.0, page="deepseek")
         d.quota_snapshot_if_available = lambda now=None: quota.QuotaSnapshot(50, 50)
         d.deepseek_values_if_available = lambda now=None: None
         self.assertTrue(d.display_should_paint(now=1000.0))
         self.assertEqual(d.page, "minimax")
+
+    def test_failed_first_fetch_is_throttled(self):
+        d = make_daemon(deepseek_enabled=True, deepseek_api_key="k",
+                        deepseek_balance=None, deepseek_last_fetch_at=0.0)
+        calls = []
+        original = daemon_module.deepseek.fetch_balance
+
+        def failing_fetch(api_key, api_base):
+            calls.append(1)
+            raise deepseek_module.DeepSeekError("boom")
+
+        daemon_module.deepseek.fetch_balance = failing_fetch
+        try:
+            for t in range(0, 60):          # 连续 60 次 tick（60 秒）
+                d.deepseek_values_if_available(now=1000.0 + t)
+        finally:
+            daemon_module.deepseek.fetch_balance = original
+
+        self.assertEqual(len(calls), 1, "首次失败后应等满轮询间隔再重试")
+
+    def test_failed_fetch_retries_after_interval(self):
+        d = make_daemon(deepseek_enabled=True, deepseek_api_key="k",
+                        deepseek_balance=None, deepseek_last_fetch_at=0.0)
+        calls = []
+        original = daemon_module.deepseek.fetch_balance
+
+        def failing_fetch(api_key, api_base):
+            calls.append(1)
+            raise deepseek_module.DeepSeekError("boom")
+
+        daemon_module.deepseek.fetch_balance = failing_fetch
+        try:
+            d.deepseek_values_if_available(now=1000.0)
+            d.deepseek_values_if_available(now=1000.0 + 301)
+        finally:
+            daemon_module.deepseek.fetch_balance = original
+
+        self.assertEqual(len(calls), 2)
 
 
 class TestDeepSeekSubpage(unittest.TestCase):
@@ -317,7 +355,7 @@ class TestDeepSeekSubpage(unittest.TestCase):
                         deepseek_balance=456.0, deepseek_spend=123.0,
                         page="deepseek", page_started_at=0.0,
                         deepseek_subpage_started_at=0.0,
-                        last_effect_finished_at=0.0,
+                        last_effect_finished_at=-1000.0,
                         quota_needs_repaint=False)
         d.quota_snapshot_if_available = lambda now=None: quota.QuotaSnapshot(50, 50)
         d.deepseek_values_if_available = lambda now=None: (d.deepseek_spend,
