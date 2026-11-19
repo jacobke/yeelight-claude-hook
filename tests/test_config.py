@@ -20,7 +20,7 @@ def make_args(**overrides):
         minimax_api_key=None, minimax_api_base=None, minimax_interval=None,
         no_minimax=False,
         deepseek_api_key=None, deepseek_api_base=None, no_deepseek=False,
-        rotation_interval=None,
+        rotation_interval=None, transition_frames=None,
     )
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -189,6 +189,7 @@ class TestDeepSeekSettings(unittest.TestCase):
         self.assertEqual(s.deepseek_alternate_interval, 5)
         self.assertEqual(s.deepseek_state_path, "")
         self.assertEqual(s.rotation_interval, 10)
+        self.assertEqual(s.rotation_transition_frames, 3)
 
     def test_config_values(self):
         cfg = {"deepseek": {
@@ -198,7 +199,7 @@ class TestDeepSeekSettings(unittest.TestCase):
             "poll_interval": 60,
             "alternate_interval": 3,
             "state_path": "/tmp/state.json",
-        }, "rotation": {"interval": 20}}
+        }, "rotation": {"interval": 20, "transition_frames": 3}}
         s = app_config.resolve_settings(make_args(), cfg, env={}, claude_token="")
         self.assertEqual(s.deepseek_api_base, "https://example.com")
         self.assertEqual(s.deepseek_api_key, "ds-key")
@@ -206,6 +207,7 @@ class TestDeepSeekSettings(unittest.TestCase):
         self.assertEqual(s.deepseek_alternate_interval, 3)
         self.assertEqual(s.deepseek_state_path, "/tmp/state.json")
         self.assertEqual(s.rotation_interval, 20)
+        self.assertEqual(s.rotation_transition_frames, 3)
 
     def test_env_key_wins_over_config(self):
         cfg = {"deepseek": {"api_key": "from-config"}}
