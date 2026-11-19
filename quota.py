@@ -54,6 +54,9 @@ RESET_STOPS = (
     (1.00, (255, 80, 0)),     # 橙
 )
 
+# 中间那行的「轨道」：还没走到的部分用暗灰常亮，让整行看起来是完整的
+RESET_TRACK = (36, 36, 36)
+
 
 class QuotaError(Exception):
     """配额查询或解析失败"""
@@ -236,9 +239,13 @@ def render_bar(interval_pct, weekly_pct, reset_pct=None):
 
     filled = reset_fill_columns(reset_pct)
     if filled is not None:
-        for col in range(filled):
-            pos = col / float(BAR_WIDTH - 1)
-            grid[2 * COLS + col] = _gradient_color(pos)
+        # 整行 19 格常亮：走过的部分走渐变色，没走到的是暗灰轨道
+        for col in range(BAR_WIDTH):
+            if col < filled:
+                pos = col / float(BAR_WIDTH - 1)
+                grid[2 * COLS + col] = _gradient_color(pos)
+            else:
+                grid[2 * COLS + col] = RESET_TRACK
 
     return grid
 

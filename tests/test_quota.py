@@ -620,11 +620,33 @@ class TestResetBar(unittest.TestCase):
         for col in range(quota.COLS):
             self.assertEqual(grid[2 * quota.COLS + col], quota.BLACK)
 
-    def test_row2_lights_with_reset_progress(self):
+    def test_row2_always_fully_lit_when_progress_given(self):
+        # 整行 19 格常亮：走过的部分是渐变色，剩下的是暗灰轨道
+        for pct in (0, 1, 50, 100):
+            grid = quota.render_bar(50, 50, reset_pct=pct)
+            for col in range(quota.BAR_WIDTH):
+                self.assertNotEqual(grid[2 * quota.COLS + col], quota.BLACK,
+                                    "reset_pct=%d 时 col%d 不应是黑的" % (pct, col))
+
+    def test_row2_colored_part_matches_progress(self):
+        for pct, expected in ((0, 1), (50, 10), (100, 19)):
+            grid = quota.render_bar(50, 50, reset_pct=pct)
+            colored = sum(1 for col in range(quota.BAR_WIDTH)
+                          if grid[2 * quota.COLS + col] not in (quota.BLACK,
+                                                                quota.RESET_TRACK))
+            self.assertEqual(colored, expected, "reset_pct=%d 的彩色列数不对" % pct)
+
+    def test_row2_remainder_is_dark_grey_track(self):
         grid = quota.render_bar(50, 50, reset_pct=50)
-        lit = sum(1 for col in range(quota.BAR_WIDTH)
-                  if grid[2 * quota.COLS + col] != quota.BLACK)
-        self.assertEqual(lit, 10)
+        row = 2 * quota.COLS
+        # 前 10 格是彩色（非黑非灰），后 9 格是暗灰
+        for col in range(10):
+            self.assertNotIn(grid[row + col], (quota.BLACK, quota.RESET_TRACK))
+        for col in range(10, quota.BAR_WIDTH):
+            self.assertEqual(grid[row + col], quota.RESET_TRACK)
+        # 轨道明显暗于彩色部分
+        self.assertLess(sum(quota.RESET_TRACK),
+                        sum(grid[row]))
 
     def test_reset_row_last_column_black(self):
         grid = quota.render_bar(50, 50, reset_pct=100)
@@ -651,11 +673,12 @@ class TestResetBar(unittest.TestCase):
         self.assertGreater(first[2], first[0])
         self.assertGreater(last[0], last[2])
 
-    def test_reset_row_keeps_one_dot_at_zero_progress(self):
+    def test_reset_row_keeps_one_colored_cell_at_zero_progress(self):
         grid = quota.render_bar(50, 50, reset_pct=0)
-        lit = sum(1 for col in range(quota.BAR_WIDTH)
-                  if grid[2 * quota.COLS + col] != quota.BLACK)
-        self.assertEqual(lit, 1)
+        row = 2 * quota.COLS
+        self.assertNotIn(grid[row], (quota.BLACK, quota.RESET_TRACK))
+        for col in range(1, quota.BAR_WIDTH):
+            self.assertEqual(grid[row + col], quota.RESET_TRACK)
 
 
 if __name__ == "__main__":
