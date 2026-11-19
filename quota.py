@@ -165,3 +165,40 @@ def render_bar(interval_pct, weekly_pct):
     draw(ROW_TOP, interval_pct, WARM_RAMP)
     draw(ROW_BOTTOM, weekly_pct, COOL_RAMP)
     return grid
+
+
+def fetch_quota(api_key, api_base=DEFAULT_API_BASE, timeout=10.0):
+    """请求 MiniMax 配额接口 → QuotaSnapshot。任何失败都抛 QuotaError"""
+    if not api_key:
+        raise QuotaError("未配置 MiniMax API key")
+
+    try:
+        url = api_base.rstrip("/") + "/v1/token_plan/remains"
+        request = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": "Bearer " + api_key,
+                "Content-Type": "application/json",
+            },
+            method="GET",
+        )
+    except (AttributeError, TypeError, ValueError) as e:
+        # api_base 配错（不是字符串 / URL 格式非法）也要变成 QuotaError
+        raise QuotaError("MiniMax API 地址非法: %s" % e) from e
+
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        raise QuotaError("MiniMax API HTTP %s" % e.code) from e
+    except urllib.error.URLError as e:
+        raise QuotaError("MiniMax API 网络错误: %s" % e.reason) from e
+    except OSError as e:
+        raise QuotaError("MiniMax API 请求失败: %s" % e) from e
+
+    try:
+        body = json.loads(raw)
+    except ValueError as e:
+        raise QuotaError("MiniMax API 返回的不是合法 JSON") from e
+
+    return parse_remains(body)

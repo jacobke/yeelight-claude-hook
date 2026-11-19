@@ -450,5 +450,101 @@ class TestRenderBar(unittest.TestCase):
         self.assertEqual(grid[row * quota.COLS + 14], quota.BLACK)
 
 
+class FakeResponse:
+    """模拟 urllib 的 HTTP 响应对象"""
+
+    def __init__(self, body):
+        self._body = body
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+class TestFetchQuota(unittest.TestCase):
+    def setUp(self):
+        self._original_urlopen = quota.urllib.request.urlopen
+
+    def tearDown(self):
+        quota.urllib.request.urlopen = self._original_urlopen
+
+    def test_requires_api_key(self):
+        with self.assertRaises(quota.QuotaError):
+            quota.fetch_quota("")
+
+    def test_network_failure_becomes_quota_error(self):
+        with self.assertRaises(quota.QuotaError):
+            quota.fetch_quota("dummy", api_base="http://127.0.0.1:9", timeout=1)
+
+    def test_successful_fetch(self):
+        payload = json.dumps({
+            "model_remains": [{
+                "model_name": "general",
+                "current_interval_remaining_percent": 64,
+                "current_weekly_remaining_percent": 23,
+            }],
+            "base_resp": {"status_code": 0, "status_msg": "success"},
+        }).encode()
+
+        captured = {}
+
+        def fake_urlopen(request, timeout=None):
+            captured["url"] = request.full_url
+            captured["auth"] = request.get_header("Authorization")
+            return FakeResponse(payload)
+
+        quota.urllib.request.urlopen = fake_urlopen
+        snapshot = quota.fetch_quota("dummy-key")
+
+        self.assertEqual(snapshot.interval_pct, 64)
+        self.assertEqual(snapshot.weekly_pct, 23)
+        self.assertEqual(captured["url"],
+                         "https://api.minimaxi.com/v1/token_plan/remains")
+        self.assertEqual(captured["auth"], "Bearer dummy-key")
+
+    def test_trailing_slash_in_api_base_is_tolerated(self):
+        payload = json.dumps({
+            "model_remains": [{"model_name": "general",
+                               "current_interval_remaining_percent": 10,
+                               "current_weekly_remaining_percent": 20}],
+            "base_resp": {"status_code": 0},
+        }).encode()
+        captured = {}
+
+        def fake_urlopen(request, timeout=None):
+            captured["url"] = request.full_url
+            return FakeResponse(payload)
+
+        quota.urllib.request.urlopen = fake_urlopen
+        quota.fetch_quota("dummy-key", api_base="https://api.minimaxi.com/")
+        self.assertEqual(captured["url"],
+                         "https://api.minimaxi.com/v1/token_plan/remains")
+
+    def test_invalid_json_becomes_quota_error(self):
+        quota.urllib.request.urlopen = lambda request, timeout=None: FakeResponse(b"not json")
+        with self.assertRaises(quota.QuotaError):
+            quota.fetch_quota("dummy-key")
+
+    def test_business_error_becomes_quota_error(self):
+        payload = json.dumps({
+            "base_resp": {"status_code": 2049, "status_msg": "invalid api key"}
+        }).encode()
+        quota.urllib.request.urlopen = lambda request, timeout=None: FakeResponse(payload)
+        with self.assertRaises(quota.QuotaError):
+            quota.fetch_quota("dummy-key")
+
+    def test_malformed_api_base_becomes_quota_error(self):
+        """api_base 配错时只能抛 QuotaError，不能把 ValueError/AttributeError 漏出去"""
+        for bad_base in ("", "not a url", "://x", 123):
+            with self.subTest(api_base=bad_base):
+                with self.assertRaises(quota.QuotaError):
+                    quota.fetch_quota("dummy-key", api_base=bad_base)
+
+
 if __name__ == "__main__":
     unittest.main()
