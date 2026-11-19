@@ -65,16 +65,17 @@ class QuotaSnapshot:
 def _clamp_pct(value):
     """把接口返回的百分比规整成 0..100 的整数；非数字按 0 处理"""
     try:
-        pct = int(value)
-    except (TypeError, ValueError):
+        pct = int(float(value))
+    except (TypeError, ValueError, OverflowError):
         return 0
     return max(0, min(100, pct))
 
 
 def _to_int(value):
+    """把接口返回的整数规整为 int；非数字/不可转的返回 0"""
     try:
-        return int(value)
-    except (TypeError, ValueError):
+        return int(float(value))
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 
@@ -87,6 +88,11 @@ def parse_remains(body):
     if not isinstance(base_resp, dict):
         raise QuotaError("响应缺少 base_resp")
     status = base_resp.get("status_code")
+    if isinstance(status, bool) or not isinstance(status, int):
+        try:
+            status = int(status)
+        except (TypeError, ValueError, OverflowError):
+            status = -1
     if status != 0:
         raise QuotaError("MiniMax API 错误: %s (status_code=%s)"
                          % (base_resp.get("status_msg", ""), status))
@@ -101,7 +107,11 @@ def parse_remains(body):
             entry = item
             break
     if entry is None:
-        entry = entries[0]
+        # 没有 general 就取第一条「可用」的条目（跳过非 dict 的垃圾数据）
+        for item in entries:
+            if isinstance(item, dict):
+                entry = item
+                break
     if not isinstance(entry, dict):
         raise QuotaError("model_remains 条目格式异常")
 
