@@ -283,12 +283,12 @@ class TestPaletteDisjointFromMiniMax(unittest.TestCase):
     """DeepSeek 页的配色不得与 MiniMax 页的任何颜色重合"""
 
     def test_no_overlap_with_minimax_palette(self):
-        import quota
+        import minimax
         minimax_colors = {
-            quota.GREEN, quota.YELLOW, quota.RED, quota.TEAL, quota.BLUE,
-            quota.PURPLE, quota.BLACK, quota.RESET_TRACK,
+            minimax.GREEN, minimax.YELLOW, minimax.RED, minimax.TEAL, minimax.BLUE,
+            minimax.PURPLE, minimax.BLACK, minimax.RESET_TRACK,
         }
-        for _, color in quota.RESET_STOPS:
+        for _, color in minimax.RESET_STOPS:
             minimax_colors.add(color)
 
         deepseek_colors = {deepseek.SPEND_COLOR, deepseek.BALANCE_COLOR}
@@ -297,10 +297,10 @@ class TestPaletteDisjointFromMiniMax(unittest.TestCase):
                          "DeepSeek 配色与 MiniMax 重合: %s" % (overlap,))
 
     def test_rendered_pixels_never_match_minimax(self):
-        import quota
-        minimax_colors = {quota.GREEN, quota.YELLOW, quota.RED, quota.TEAL,
-                          quota.BLUE, quota.PURPLE, quota.RESET_TRACK}
-        for _, color in quota.RESET_STOPS:
+        import minimax
+        minimax_colors = {minimax.GREEN, minimax.YELLOW, minimax.RED, minimax.TEAL,
+                          minimax.BLUE, minimax.PURPLE, minimax.RESET_TRACK}
+        for _, color in minimax.RESET_STOPS:
             minimax_colors.add(color)
 
         grids = [
@@ -318,7 +318,7 @@ class TestPaletteDisjointFromMiniMax(unittest.TestCase):
 class TestSpendTracker(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()
-        self.path = os.path.join(self.dir, "quota_state.json")
+        self.path = os.path.join(self.dir, "deepseek_state.json")
 
     def test_first_run_sets_baseline(self):
         t = deepseek.SpendTracker(self.path)
