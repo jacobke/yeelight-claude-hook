@@ -14,6 +14,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import cursor_plan  # noqa: E402
 import minimax  # noqa: E402
 import deepseek as deepseek_module  # noqa: E402
 
@@ -68,6 +69,18 @@ def make_daemon(**overrides):
     daemon.deepseek_subpage = 0
     daemon.deepseek_subpage_started_at = 0.0
     daemon.last_deepseek_rendered = None
+    daemon.cursor_enabled = False
+    daemon.cursor_api_base = cursor_plan.DEFAULT_API_BASE
+    daemon.cursor_access_token = ""
+    daemon.cursor_refresh_token = ""
+    daemon.cursor_poll_interval = 300
+    daemon.cursor_alternate_interval = 5
+    daemon.cursor_used = 0.0
+    daemon.cursor_remaining = None
+    daemon.cursor_last_fetch_at = 0.0
+    daemon.cursor_subpage = 0
+    daemon.cursor_subpage_started_at = 0.0
+    daemon.last_cursor_rendered = None
     daemon.rotation_interval = 10
     daemon.transition_frames = 5
     daemon.transition = None
@@ -393,6 +406,33 @@ class TestPageRotation(unittest.TestCase):
             d.deepseek_values_if_available(now=1000.0 + 301)
         finally:
             daemon_module.deepseek.fetch_balance = original
+
+        self.assertEqual(len(calls), 2)
+
+    def test_rotates_to_cursor_after_deepseek(self):
+        d = self._daemon_with_both_pages(page="deepseek", page_started_at=0.0,
+                                         cursor_enabled=True)
+        d.cursor_values_if_available = lambda now=None: (4.0, 16.0)
+        self.assertTrue(d.display_should_paint(now=11.0))
+        self.assertEqual(d.transition["to"], "cursor")
+
+    def test_cursor_fetch_failure_is_throttled(self):
+        d = make_daemon(cursor_enabled=True, cursor_access_token="tok",
+                        cursor_remaining=None, cursor_last_fetch_at=0.0)
+        calls = []
+        original = daemon_module.cursor_plan.fetch_period_usage
+
+        def failing_fetch(token, api_base):
+            calls.append(1)
+            raise cursor_plan.CursorError("boom")
+
+        daemon_module.cursor_plan.fetch_period_usage = failing_fetch
+        try:
+            d.cursor_values_if_available(now=1000.0)
+            d.cursor_values_if_available(now=1000.0 + 10)
+            d.cursor_values_if_available(now=1000.0 + 301)
+        finally:
+            daemon_module.cursor_plan.fetch_period_usage = original
 
         self.assertEqual(len(calls), 2)
 

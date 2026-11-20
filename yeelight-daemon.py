@@ -22,6 +22,7 @@ import struct
 import threading
 
 import config as app_config
+import cursor_plan
 import minimax
 import deepseek
 
@@ -179,7 +180,13 @@ class YeelightDaemon:
                  deepseek_alternate_interval=deepseek.ALTERNATE_INTERVAL_DEFAULT,
                  deepseek_state_path="",
                  rotation_interval=10,
-                 transition_frames=3):
+                 transition_frames=3,
+                 cursor_enabled=False,
+                 cursor_api_base=cursor_plan.DEFAULT_API_BASE,
+                 cursor_access_token="",
+                 cursor_state_db="",
+                 cursor_poll_interval=cursor_plan.POLL_INTERVAL_DEFAULT,
+                 cursor_alternate_interval=cursor_plan.ALTERNATE_INTERVAL_DEFAULT):
         self.ip = ip
         self.port = port
         self.instance = instance  # 实例编号 (0=不显示, 1-20=显示位置)
@@ -233,6 +240,31 @@ class YeelightDaemon:
         self.deepseek_subpage = 0
         self.deepseek_subpage_started_at = time.time()
         self.last_deepseek_rendered = None
+
+        # ===== Cursor 套餐余量页 =====
+        self.cursor_api_base = cursor_api_base
+        self.cursor_access_token = cursor_access_token or ""
+        self.cursor_refresh_token = ""
+        self.cursor_poll_interval = cursor_poll_interval
+        self.cursor_alternate_interval = cursor_alternate_interval
+        if cursor_enabled and not self.cursor_access_token:
+            try:
+                access, refresh = cursor_plan.read_local_tokens(cursor_state_db or None)
+            except cursor_plan.CursorError as e:
+                print("Cursor page disabled: %s" % e, file=sys.stderr, flush=True)
+                access, refresh = "", ""
+            self.cursor_access_token = access
+            self.cursor_refresh_token = refresh
+        if cursor_enabled and not self.cursor_access_token:
+            print("Cursor page disabled (not signed in to Cursor)",
+                  file=sys.stderr, flush=True)
+        self.cursor_enabled = cursor_enabled and bool(self.cursor_access_token)
+        self.cursor_used = 0.0
+        self.cursor_remaining = None
+        self.cursor_last_fetch_at = 0.0
+        self.cursor_subpage = 0
+        self.cursor_subpage_started_at = time.time()
+        self.last_cursor_rendered = None
 
     def mark_instance(self, grid, color=(255, 200, 50)):
         """在 grid 上标记实例编号（土豪金像素）
@@ -438,6 +470,44 @@ class YeelightDaemon:
         self.deepseek_last_fetch_at = now
         return (self.deepseek_spend, self.deepseek_balance)
 
+    def _fetch_cursor_usage(self):
+        """拉当前账期用量。access token 失效时用内存中的 refresh token 换一次"""
+        try:
+            return cursor_plan.fetch_period_usage(
+                self.cursor_access_token, self.cursor_api_base)
+        except cursor_plan.CursorAuthError:
+            if not self.cursor_refresh_token:
+                raise
+            self.cursor_access_token = cursor_plan.refresh_access_token(
+                self.cursor_refresh_token, self.cursor_api_base)
+            return cursor_plan.fetch_period_usage(
+                self.cursor_access_token, self.cursor_api_base)
+
+    def cursor_values_if_available(self, now=None):
+        """取 (本周期已用, 剩余额度)；不可用时返回 None"""
+        if not self.cursor_enabled:
+            return None
+        if now is None:
+            now = time.time()
+        if now - self.cursor_last_fetch_at < self.cursor_poll_interval:
+            if self.cursor_remaining is None:
+                return None
+            return (self.cursor_used, self.cursor_remaining)
+
+        try:
+            used, remaining = self._fetch_cursor_usage()
+        except cursor_plan.CursorError as e:
+            print("Cursor fetch failed: %s" % e, file=sys.stderr, flush=True)
+            self.cursor_last_fetch_at = now
+            if self.cursor_remaining is None:
+                return None
+            return (self.cursor_used, self.cursor_remaining)
+
+        self.cursor_used = used
+        self.cursor_remaining = remaining
+        self.cursor_last_fetch_at = now
+        return (self.cursor_used, self.cursor_remaining)
+
     def available_pages(self, now=None):
         """当前可显示的页面列表（顺序即轮播顺序）"""
         pages = []
@@ -446,6 +516,9 @@ class YeelightDaemon:
         if (self.deepseek_enabled
                 and self.deepseek_values_if_available(now) is not None):
             pages.append("deepseek")
+        if (self.cursor_enabled
+                and self.cursor_values_if_available(now) is not None):
+            pages.append("cursor")
         return pages
 
     def reset_page_after_effect(self, now=None):
@@ -456,13 +529,15 @@ class YeelightDaemon:
         self.page_started_at = now
         self.deepseek_subpage = 0
         self.deepseek_subpage_started_at = now
+        self.cursor_subpage = 0
+        self.cursor_subpage_started_at = now
         self.transition = None
 
     def display_should_paint(self, now=None):
         """是否需要重绘当前屏幕（可能顺带切换页面）"""
         if now is None:
             now = time.time()
-        if not self.minimax_enabled and not self.deepseek_enabled:
+        if not (self.minimax_enabled or self.deepseek_enabled or self.cursor_enabled):
             return False
         if self.effect_thread and self.effect_thread.is_alive():
             return False
@@ -506,6 +581,22 @@ class YeelightDaemon:
                 key = (mode, tuple(texts), 0)
             return key != self.last_deepseek_rendered or self.display_needs_repaint
 
+        if self.page == "cursor":
+            values = self.cursor_values_if_available(now)
+            if values is None:
+                return False
+            mode, texts = cursor_plan.compose_page(values[0], values[1])
+            if mode == "alternate":
+                if (now - self.cursor_subpage_started_at
+                        >= self.cursor_alternate_interval):
+                    self.cursor_subpage ^= 1
+                    self.cursor_subpage_started_at = now
+                    return True
+                key = (mode, tuple(texts), self.cursor_subpage)
+            else:
+                key = (mode, tuple(texts), 0)
+            return key != self.last_cursor_rendered or self.display_needs_repaint
+
         # MiniMax 页
         snapshot = self.minimax_snapshot_if_available(now)
         if snapshot is None:
@@ -544,6 +635,13 @@ class YeelightDaemon:
             mode, texts = deepseek.compose_page(values[0], values[1])
             index = self.deepseek_subpage if mode == "alternate" else 0
             return deepseek.render_page(mode, texts, index)
+        if page == "cursor":
+            values = self.cursor_values_if_available(now)
+            if values is None:
+                return None
+            mode, texts = cursor_plan.compose_page(values[0], values[1])
+            index = self.cursor_subpage if mode == "alternate" else 0
+            return cursor_plan.render_page(mode, texts, index)
         snapshot = self.minimax_snapshot_if_available(now)
         if snapshot is None:
             return None
@@ -559,6 +657,8 @@ class YeelightDaemon:
             self.page_started_at = now
             self.deepseek_subpage = 0
             self.deepseek_subpage_started_at = now
+            self.cursor_subpage = 0
+            self.cursor_subpage_started_at = now
             self.transition = None
             return
         self.transition = {
@@ -579,6 +679,8 @@ class YeelightDaemon:
             self.transition = None
             self.page = t["to"]
             self.page_started_at = now
+            self.cursor_subpage = 0
+            self.cursor_subpage_started_at = now
             return
 
         t["step"] += 1
@@ -589,6 +691,8 @@ class YeelightDaemon:
             self.page_started_at = now
             self.deepseek_subpage = 0
             self.deepseek_subpage_started_at = now
+            self.cursor_subpage = 0
+            self.cursor_subpage_started_at = now
             self.transition = None
         else:
             t["next_at"] = now + self.command_interval
@@ -619,6 +723,17 @@ class YeelightDaemon:
             self.last_deepseek_rendered = (mode, tuple(texts), index)
             self.display_needs_repaint = False
             return
+        if self.page == "cursor":
+            values = self.cursor_values_if_available(now)
+            if values is None:
+                return
+            mode, texts = cursor_plan.compose_page(values[0], values[1])
+            index = self.cursor_subpage if mode == "alternate" else 0
+            grid = cursor_plan.render_page(mode, texts, index)
+            self._takeover_and_send(grid)
+            self.last_cursor_rendered = (mode, tuple(texts), index)
+            self.display_needs_repaint = False
+            return
         snapshot = self.minimax_snapshot_if_available(now)
         if snapshot is not None:
             self.paint_minimax(snapshot)
@@ -641,7 +756,7 @@ class YeelightDaemon:
 
     def start_display_thread(self):
         """启动显示线程（两个数据源都不可用时不启动）"""
-        if not self.minimax_enabled and not self.deepseek_enabled:
+        if not (self.minimax_enabled or self.deepseek_enabled or self.cursor_enabled):
             print("Display disabled (no API key)", file=sys.stderr, flush=True)
             return
         self.display_thread = threading.Thread(target=self.display_loop, daemon=True)
@@ -926,6 +1041,10 @@ def main():
     parser.add_argument("--deepseek-api-key", default=None, help="DeepSeek API key")
     parser.add_argument("--deepseek-api-base", default=None, help="DeepSeek API 域名")
     parser.add_argument("--no-deepseek", action="store_true", help="关闭 DeepSeek 余额页")
+    parser.add_argument("--cursor-access-token", default=None,
+                        help="Cursor access token（默认读取本机 Cursor 登录态）")
+    parser.add_argument("--cursor-api-base", default=None, help="Cursor API 域名")
+    parser.add_argument("--no-cursor", action="store_true", help="关闭 Cursor 余量页")
     parser.add_argument("--rotation-interval", type=int, default=None,
                         help="两页轮播间隔（秒，默认 10）")
     parser.add_argument("--transition-frames", type=int, default=None,
@@ -942,7 +1061,7 @@ def main():
 
     if args.dry_run:
         data = dataclasses.asdict(settings)
-        for field in ("minimax_api_key", "deepseek_api_key"):
+        for field in ("minimax_api_key", "deepseek_api_key", "cursor_access_token"):
             key = data.get(field) or ""
             if key:
                 # 打码，避免把完整 key 留在终端记录里
@@ -963,7 +1082,10 @@ def main():
         settings.deepseek_enabled, settings.deepseek_api_base,
         settings.deepseek_api_key, settings.deepseek_poll_interval,
         settings.deepseek_alternate_interval, settings.deepseek_state_path,
-        settings.rotation_interval)
+        settings.rotation_interval, settings.rotation_transition_frames,
+        settings.cursor_enabled, settings.cursor_api_base,
+        settings.cursor_access_token, settings.cursor_state_db,
+        settings.cursor_poll_interval, settings.cursor_alternate_interval)
 
     def signal_handler(sig, frame):
         print("\nShutting down...")

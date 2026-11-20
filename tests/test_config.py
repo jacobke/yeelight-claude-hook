@@ -20,6 +20,7 @@ def make_args(**overrides):
         minimax_api_key=None, minimax_api_base=None, minimax_interval=None,
         no_minimax=False,
         deepseek_api_key=None, deepseek_api_base=None, no_deepseek=False,
+        cursor_access_token=None, cursor_api_base=None, no_cursor=False,
         rotation_interval=None, transition_frames=None,
     )
     defaults.update(overrides)
@@ -244,6 +245,41 @@ class TestDeepSeekSettings(unittest.TestCase):
             claude_env={"ANTHROPIC_BASE_URL": "https://api.deepseek.com",
                         "ANTHROPIC_AUTH_TOKEN": "claude-token"})
         self.assertEqual(s.deepseek_api_key, "from-config")
+
+    def test_cursor_defaults_and_local_token(self):
+        s = app_config.resolve_settings(make_args(), {}, env={}, claude_token="")
+        self.assertFalse(s.cursor_enabled)
+        self.assertEqual(s.cursor_api_base, "https://api2.cursor.sh")
+        self.assertEqual(s.cursor_access_token, "")
+        self.assertEqual(s.cursor_state_db, "")
+        self.assertEqual(s.cursor_poll_interval, 300)
+        self.assertEqual(s.cursor_alternate_interval, 5)
+
+    def test_cursor_token_precedence(self):
+        cfg = {"cursor": {"access_token": "from-config", "api_base": "https://example.test",
+                          "poll_interval": 90, "state_db": "/tmp/state.vscdb"}}
+        from_env = app_config.resolve_settings(
+            make_args(), cfg, env={"CURSOR_ACCESS_TOKEN": "from-env"}, claude_token="")
+        self.assertEqual(from_env.cursor_access_token, "from-env")
+        self.assertEqual(from_env.cursor_api_base, "https://example.test")
+        self.assertEqual(from_env.cursor_poll_interval, 90)
+        self.assertEqual(from_env.cursor_state_db, "/tmp/state.vscdb")
+
+        from_cli = app_config.resolve_settings(
+            make_args(cursor_access_token="from-cli"), cfg,
+            env={"CURSOR_ACCESS_TOKEN": "from-env"}, claude_token="")
+        self.assertEqual(from_cli.cursor_access_token, "from-cli")
+
+    def test_no_cursor_flag_disables(self):
+        cfg = {"cursor": {"enabled": True, "access_token": "tok"}}
+        s = app_config.resolve_settings(make_args(no_cursor=True), cfg, env={},
+                                        claude_token="")
+        self.assertFalse(s.cursor_enabled)
+
+    def test_cursor_config_can_disable(self):
+        s = app_config.resolve_settings(
+            make_args(), {"cursor": {"enabled": False}}, env={}, claude_token="")
+        self.assertFalse(s.cursor_enabled)
 
     def test_no_deepseek_flag_disables(self):
         s = app_config.resolve_settings(make_args(no_deepseek=True), {},

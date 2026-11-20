@@ -26,6 +26,7 @@
 - 🔌 **Long Connection** - Daemon mode avoids device connection quota limits
 - 🔢 **Instance Marking** - Gold pixel shows Claude Code instance number (1-5)
 - 📊 **Quota Meter** - Progress bars show remaining MiniMax Token Plan allowance
+- 💳 **Cursor balance** - included usage spent and remaining this billing cycle
 
 ## Demo
 
@@ -71,11 +72,29 @@ alternates with the MiniMax page every 10 seconds:
 - The baseline is stored in `deepseek_state.json` (git-ignored) and survives restarts.
 - When both amounts are large, the page switches to alternating the two values.
 - Balances of 10,000+ are abbreviated as `12K` / `1.2M`.
-- **Transition**: the two pages cross-fade over 3 frames (~3 s) instead of hard-cutting. Tune with `rotation.transition_frames`; set it to 0 for an instant switch.
+- **Transition**: pages cross-fade over 3 frames (~3 s) instead of hard-cutting. Tune with `rotation.transition_frames`; set it to 0 for an instant switch.
 
 Configure `deepseek.api_key` in `config.json`. If Claude Code is already pointed at
 DeepSeek in `~/.claude/settings.json`, that key is reused automatically.
 Disable with `--no-deepseek` or `"deepseek": { "enabled": false }`.
+
+## Cursor balance page
+
+**Off by default.** Cursor has no stable public API; usage is read from the local
+desktop login (on macOS that usually requires Keychain decryption), so this page
+is opt-in. Enable with `"cursor": { "enabled": true }` in `config.json`.
+
+When enabled, after you sign in to the Cursor desktop app, the lamp adds another
+page to the rotation. Values are included usage for the current billing cycle:
+dollars when the API returns them, otherwise used/remaining percentages
+(for example `4.2` spent and `16` left).
+
+- No separate API key. The daemon reads tokens from local `state.vscdb`, decrypts
+  newer sealed tokens with the macOS **Cursor Safe Storage** Keychain item, and does
+  not write tokens back. The first read may prompt for Keychain access.
+- Same undocumented billing API the Cursor app uses; response shape can change.
+- Large values alternate on one page, same as the DeepSeek page.
+- Disable with `--no-cursor` or `"cursor": { "enabled": false }` (omit `cursor` = off).
 
 ## Quick Start
 

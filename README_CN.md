@@ -26,6 +26,7 @@
 - 🔌 **长连接** - Daemon 模式避免设备连接配额限制
 - 🔢 **实例标记** - 土豪金像素显示 Claude Code 实例编号 (1-5)
 - 📊 **配额进度条** - 展示 MiniMax Token Plan 剩余额度
+- 💳 **Cursor 余量** - 展示当前套餐本周期已用和剩余额度
 
 ## 效果预览
 
@@ -70,7 +71,7 @@ row0 |█████···············|
 - 基线保存在 `deepseek_state.json`（已 gitignore），重启 daemon 不会丢失
 - 金额较大时（3 位数 + 3 位数放不下）会自动改为同一页内轮流显示
 - 余额 5 位以上会缩写成 `12K` / `1.2M`
-- **切换效果**：两页之间做 3 帧交叉淡化（约 3 秒），不是硬切；用 `rotation.transition_frames` 调整，设 0 则直接切换
+- **切换效果**：页面之间做 3 帧交叉淡化（约 3 秒），不是硬切；用 `rotation.transition_frames` 调整，设 0 则直接切换
 
 **配置**：在 `config.json` 里加 `deepseek.api_key`。如果 `~/.claude/settings.json`
 已经把 Claude Code 指向 DeepSeek，会自动复用那个 key，不用额外配置。
@@ -80,6 +81,27 @@ row0 |█████···············|
 ```
 
 关闭这一页：`--no-deepseek` 或 `"deepseek": { "enabled": false }`。
+
+## Cursor 余量页
+
+**默认关闭。** Cursor 没有稳定的公开 API，只能读本机桌面端登录态（macOS 上通常还要用钥匙串解密），所以不默认开启。需要时在 `config.json` 里设 `"cursor": { "enabled": true }`。
+
+开启后，登录过 Cursor 桌面端，灯会多一页，和 MiniMax、DeepSeek 一起轮播。
+数字是当前账期套餐用量：有美元额度时显示金额；只有百分比时显示已用/剩余百分比
+（下面示例是 `4.2` 已用、`16` 剩余）：
+
+```
+|·█·█···███··█··███·|    珊瑚 = 本周期已用
+|·█·█·····█·██··█···|    青柠 = 剩余额度
+|·███···███··█··███·|
+|···█···█····█··█·█·|
+|···█·█·███·███·███·|
+```
+
+- 不需要单独的 API key。daemon 只读本机 Cursor 的登录态。新版 Cursor 把 token 加密存在 `state.vscdb` 里，daemon 用钥匙串中的 Cursor Safe Storage 解开，不会把 token 写回去。第一次读取时 macOS 可能会询问是否允许访问钥匙串
+- 接口是 Cursor 客户端自己用的账单接口，官方没有把它做成稳定的公开 API，字段以后可能会变
+- 金额较大、一行放不下时，和 DeepSeek 页一样改成轮流显示
+- 关闭：`--no-cursor` 或 `"cursor": { "enabled": false }`（不设 `cursor` 段时也为关闭）
 
 ## 快速开始
 

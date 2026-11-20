@@ -215,19 +215,25 @@ def _draw_text(grid, text, col0, color):
         col += width + 1
 
 
-def render_page(mode, texts, index=0):
-    """渲染 DeepSeek 页 → 100 个 (r, g, b) 像素
+def render_page(mode, texts, index=0, left_color=None, right_color=None):
+    """渲染数字页 → 100 个 (r, g, b) 像素
 
-    mode == "side"       texts[0] 品红居左、texts[1] 白色居右，中间 1 列分隔
-    mode == "alternate"  只显示 texts[index]，index 0 = 品红消费，1 = 白余额
+    mode == "side"       texts[0] 居左、texts[1] 居右，中间 1 列分隔
+    mode == "alternate"  只显示 texts[index]，index 0 用左色，1 用右色
+
+    默认左色是 DeepSeek 消费品红，右色是余额白。Cursor 页传入自己的颜色。
     """
+    if left_color is None:
+        left_color = SPEND_COLOR
+    if right_color is None:
+        right_color = BALANCE_COLOR
     grid = [BLACK] * (ROWS * COLS)
 
     if mode == "alternate":
         text = texts[index] if 0 <= index < len(texts) else ""
         if not text:
             return grid
-        color = SPEND_COLOR if index == 0 else BALANCE_COLOR
+        color = left_color if index == 0 else right_color
         start = (USABLE_WIDTH - text_width(text)) // 2
         _draw_text(grid, text, start, color)
         return grid
@@ -239,9 +245,9 @@ def render_page(mode, texts, index=0):
     total = left_w + (1 + right_w if right else 0)
     start = (USABLE_WIDTH - total) // 2
     if left:
-        _draw_text(grid, left, start, SPEND_COLOR)
+        _draw_text(grid, left, start, left_color)
     if right:
-        _draw_text(grid, right, start + left_w + 1, BALANCE_COLOR)
+        _draw_text(grid, right, start + left_w + 1, right_color)
     return grid
 
 

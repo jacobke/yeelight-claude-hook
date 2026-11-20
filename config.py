@@ -15,6 +15,7 @@ from typing import Optional
 
 from minimax import DEFAULT_API_BASE, POLL_INTERVAL_DEFAULT, TAKEOVER_DELAY_DEFAULT
 
+import cursor_plan
 import deepseek
 
 DEFAULT_PORT = 55443
@@ -40,6 +41,12 @@ class Settings:
     deepseek_poll_interval: int
     deepseek_alternate_interval: int
     deepseek_state_path: str
+    cursor_enabled: bool
+    cursor_api_base: str
+    cursor_access_token: str
+    cursor_state_db: str
+    cursor_poll_interval: int
+    cursor_alternate_interval: int
     rotation_interval: int
     rotation_transition_frames: int
 
@@ -223,6 +230,38 @@ def resolve_settings(args, config, env=None, claude_token="", claude_env=None):
     else:
         deepseek_enabled = True
 
+    cursor_cfg = config.get("cursor")
+    if not isinstance(cursor_cfg, dict):
+        cursor_cfg = {}
+
+    cursor_access_token = (
+        getattr(args, "cursor_access_token", None)
+        or env.get("CURSOR_ACCESS_TOKEN")
+        or cursor_cfg.get("access_token")
+        or ""
+    )
+    cursor_api_base = (
+        getattr(args, "cursor_api_base", None)
+        or cursor_cfg.get("api_base")
+        or cursor_plan.DEFAULT_API_BASE
+    )
+    cursor_state_db = cursor_cfg.get("state_db") or ""
+
+    cursor_poll_interval = _int_or_none(cursor_cfg.get("poll_interval"))
+    if cursor_poll_interval is None:
+        cursor_poll_interval = cursor_plan.POLL_INTERVAL_DEFAULT
+
+    cursor_alternate_interval = _int_or_none(cursor_cfg.get("alternate_interval"))
+    if cursor_alternate_interval is None:
+        cursor_alternate_interval = cursor_plan.ALTERNATE_INTERVAL_DEFAULT
+
+    if getattr(args, "no_cursor", False):
+        cursor_enabled = False
+    elif "enabled" in cursor_cfg:
+        cursor_enabled = bool(cursor_cfg["enabled"])
+    else:
+        cursor_enabled = False
+
     return Settings(
         ip=ip,
         port=port,
@@ -239,6 +278,12 @@ def resolve_settings(args, config, env=None, claude_token="", claude_env=None):
         deepseek_poll_interval=deepseek_poll_interval,
         deepseek_alternate_interval=deepseek_alternate_interval,
         deepseek_state_path=deepseek_state_path,
+        cursor_enabled=cursor_enabled,
+        cursor_api_base=cursor_api_base,
+        cursor_access_token=cursor_access_token,
+        cursor_state_db=cursor_state_db,
+        cursor_poll_interval=cursor_poll_interval,
+        cursor_alternate_interval=cursor_alternate_interval,
         rotation_interval=rotation_interval,
         rotation_transition_frames=transition_frames,
     )
