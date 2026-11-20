@@ -546,6 +546,10 @@ class YeelightDaemon:
 
         pages = self.available_pages(now)
         if not pages:
+            # 配额接口都挂时也要收掉 hook 留下的最后一帧
+            if (now - self.last_effect_finished_at >= self.takeover_delay
+                    and self.display_needs_repaint):
+                return True
             return False
 
         # 当前页不再可用 → 回到第一页
@@ -712,6 +716,10 @@ class YeelightDaemon:
         if self.transition is not None:
             self._paint_transition_frame(now)
             return
+        if not self.available_pages(now):
+            self._takeover_and_send([(0, 0, 0)] * 100)
+            self.display_needs_repaint = False
+            return
         if self.page == "deepseek":
             values = self.deepseek_values_if_available(now)
             if values is None:
@@ -848,6 +856,10 @@ class YeelightDaemon:
             grid = render_centered("DONE", tc)
             self.send_pixels_with_mark(grid)
             time.sleep(0.15)
+
+        # 渐出最后一帧仍可能看得见字形；清屏交给配额轮播，但先灭掉避免长期留字
+        if not self.check_interrupted():
+            self.send_pixels_with_mark([(0, 0, 0)] * 100)
 
     def effect_wait(self, duration=300):
         """紫色波浪"""
