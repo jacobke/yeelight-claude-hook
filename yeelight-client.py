@@ -24,7 +24,9 @@ def send_command(state, duration=5.0):
         cmd = {"state": state, "duration": duration}
         sock.send((json.dumps(cmd) + "\n").encode())
 
-        # 不等待响应，daemon 可能正在执行长时间效果
+        # 不等响应直接关闭：daemon 是先启动效果线程再立刻回 {"status":"ok"}，
+        # 回包并不慢，但等它会让每次 hook 都多花一个往返。
+        # daemon 侧已把这种「客户端不等响应就关闭」当作正常用法处理。
         sock.close()
         return True
     except Exception:
