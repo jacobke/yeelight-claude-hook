@@ -35,6 +35,15 @@ DEFAULT_PORT = 55443
 SOCKET_PATH = "/tmp/yeelight.sock"
 ROWS, COLS = 5, 20
 
+# Unix socket 服务端参数
+# LISTEN_BACKLOG: 连接队列深度。Claude Code 的 hook 会在短时间内连发多条命令，
+#   队列太浅会直接 ECONNREFUSED，而客户端静默吞掉异常，命令就这么丢了。
+LISTEN_BACKLOG = 64
+# CLIENT_TIMEOUT: 单个客户端的读写超时。accept() 返回的 socket 是阻塞的，
+#   不继承监听 socket 的超时 —— 不设超时的话，一个「连上但不发数据」的客户端
+#   会永久占住单线程的 accept 循环，整个 daemon 卡死。
+CLIENT_TIMEOUT = 2.0
+
 # 所有可用的效果状态
 def blend_grids(a, b, alpha):
     """按 alpha（0..1）线性混合两帧像素；alpha=0 返回 a，alpha=1 返回 b"""
@@ -293,7 +302,7 @@ class YeelightDaemon:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.sock.settimeout(5)
             self.sock.connect((self.ip, self.port))
-            print(f"Connected to {self.ip}:{self.port}", flush=True)
+            print(f"Connected to {self.ip}:{self.port}", file=sys.stderr, flush=True)
             # 连接成功后启动后台 reader 线程，持续清空设备 TCP send buffer
             # 否则长时间运行后设备会因 send buffer 填满而假死
             self._start_reader()
@@ -1003,22 +1012,35 @@ class YeelightDaemon:
 
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         server.bind(SOCKET_PATH)
-        server.listen(5)
+        server.listen(LISTEN_BACKLOG)
         server.settimeout(1.0)
-        print(f"Listening on {SOCKET_PATH}")
+        print(f"Listening on {SOCKET_PATH}", file=sys.stderr, flush=True)
 
         try:
             while self.running:
                 try:
                     client, _ = server.accept()
                     try:
+                        # accept 返回的 socket 是阻塞的，不继承上面的 1 秒超时
+                        client.settimeout(CLIENT_TIMEOUT)
                         data = client.recv(1024).decode()
                         if data:
                             cmd = json.loads(data)
                             result = self.handle_command(cmd)
-                            client.send((json.dumps(result) + "\n").encode())
+                            try:
+                                client.send((json.dumps(result) + "\n").encode())
+                            except (BrokenPipeError, ConnectionResetError):
+                                # 客户端不等响应直接关闭是正常用法
+                                # （yeelight-client.py 发完就关，不读响应）
+                                pass
+                    except socket.timeout:
+                        print("Client timeout: no data received",
+                              file=sys.stderr, flush=True)
+                    except (BrokenPipeError, ConnectionResetError):
+                        # 客户端在收发过程中断开，属正常用法
+                        pass
                     except Exception as e:
-                        print(f"Client error: {e}")
+                        print(f"Client error: {e}", file=sys.stderr, flush=True)
                     finally:
                         client.close()
                 except socket.timeout:
@@ -1027,7 +1049,7 @@ class YeelightDaemon:
             server.close()
             os.unlink(SOCKET_PATH)
             self.close()
-            print("Daemon stopped")
+            print("Daemon stopped", file=sys.stderr, flush=True)
 
     def stop(self):
         self.running = False
@@ -1100,7 +1122,7 @@ def main():
         settings.cursor_poll_interval, settings.cursor_alternate_interval)
 
     def signal_handler(sig, frame):
-        print("\nShutting down...")
+        print("\nShutting down...", file=sys.stderr, flush=True)
         daemon.stop()
 
     signal.signal(signal.SIGINT, signal_handler)
